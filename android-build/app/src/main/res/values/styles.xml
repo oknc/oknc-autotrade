@@ -1,7 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<resources>
-    <style name="AppTheme" parent="@android:style/Theme.Black.NoTitleBar.Fullscreen">
-        <item name="android:statusBarColor">#161b22</item>
-        <item name="android:navigationBarColor">#0a0e17</item>
-    </style>
-</resources>
