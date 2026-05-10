@@ -1,0 +1,15 @@
+{
+  "date": "2026-05-03",
+  "startBalance": 31.77226981,
+  "currentBalance": 30.63146135,
+  "dailyPnl": -1.1408084600000024,
+  "dailyPnlPercent": -3.590579038961026,
+  "tradeCount": 0,
+  "maxDrawdown": 3.661059178195367,
+  "peakBalance": 31.77226981,
+  "isFrozen": false,
+  "frozenReason": "",
+  "positionsClosed": 6,
+  "wins": 3,
+  "losses": 3
+}

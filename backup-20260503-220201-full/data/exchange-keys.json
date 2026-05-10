@@ -1,0 +1,11 @@
+[
+  {
+    "exchangeId": "binance",
+    "label": "币安实盘",
+    "apiKey": "a735defa48c31227bd3efd7aa8413073:ef1daecc0e5877ce8441ee65cd235e8f3403795dbd16a1a17518b7e0619205f1375c13670613c94ca02a07ccfc6073071ca72d0e32ca5bbfa10deb0dba96c0bddb4e52dae8cdbc5dcfad8ccf7feceaa2",
+    "secret": "b41b847b255090ef3f69d6ccafe0da08:9499bc6e2660c5d78af8b5b1011d863badc32ae0095315292e69e395ea148a85df76b859d9302b9953c98818fb7e5be860e1497bc974f5c3c8e9976c2764295e82587a03750141757dcd0e16eb1f11b0",
+    "testnet": false,
+    "isActive": true,
+    "addedAt": "2026-05-01T01:01:44.179Z"
+  }
+]

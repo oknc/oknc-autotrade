@@ -1,0 +1,38 @@
+{
+    "logs": [
+        {
+            "outputFile": "com.oknc.trade.app-mergeDebugResources-2:/values/values.xml",
+            "map": [
+                {
+                    "source": "/build/app/src/main/res/values/styles.xml",
+                    "from": {
+                        "startLines": "2",
+                        "startColumns": "4",
+                        "startOffsets": "55",
+                        "endLines": "5",
+                        "endColumns": "12",
+                        "endOffsets": "271"
+                    },
+                    "to": {
+                        "startLines": "3",
+                        "startColumns": "4",
+                        "startOffsets": "102",
+                        "endLines": "6",
+                        "endColumns": "12",
+                        "endOffsets": "318"
+                    }
+                },
+                {
+                    "source": "/build/app/src/main/res/values/strings.xml",
+                    "from": {
+                        "startLines": "2",
+                        "startColumns": "4",
+                        "startOffsets": "55",
+                        "endColumns": "46",
+                        "endOffsets": "97"
+                    }
+                }
+            ]
+        }
+    ]
+}

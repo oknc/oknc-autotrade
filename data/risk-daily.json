@@ -1,0 +1,22 @@
+{
+  "date": "2026-05-10",
+  "startBalance": 88.31768716,
+  "currentBalance": 87.66251715,
+  "realizedPnl": -1.1789999999999998,
+  "dailyPnl": -1.1789999999999998,
+  "dailyPnlPercent": -1.3349534367493956,
+  "tradeCount": 4,
+  "maxDrawdown": 80.44836134782676,
+  "peakBalance": 88.31768716,
+  "isFrozen": false,
+  "frozenReason": "",
+  "positionsClosed": 3,
+  "wins": 1,
+  "losses": 2,
+  "exchangeStats": {
+    "binance": {
+      "wins": 1,
+      "losses": 2
+    }
+  }
+}

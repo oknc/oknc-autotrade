@@ -1,0 +1,40 @@
+{
+  "timestamp": "2026-05-10T04:22:39.613Z",
+  "sentimentScore": 80,
+  "sentimentLabel": "bullish",
+  "keyEvents": [
+    {
+      "asset": "BTC",
+      "impact": "positive",
+      "weight": 0.9,
+      "description": "BTC突破81000美元，24小时涨幅3.2%"
+    },
+    {
+      "asset": "ETH",
+      "impact": "positive",
+      "weight": 0.8,
+      "description": "ETH ETF资金持续净流入，本周累计4.5亿美元"
+    },
+    {
+      "asset": "整体市场",
+      "impact": "positive",
+      "weight": 0.7,
+      "description": "美联储维持利率不变，市场预期6月降息概率升至65%"
+    },
+    {
+      "asset": "整体市场",
+      "impact": "positive",
+      "weight": 0.8,
+      "description": "香港批准比特币现货ETF"
+    }
+  ],
+  "marketFactors": {
+    "macro": "positive",
+    "regulatory": "positive",
+    "narrative": "降息预期与监管利好推动加密资产上涨"
+  },
+  "riskLevel": "medium",
+  "actionableAdvice": "关注BTC能否站稳81000美元，ETH ETF持续流入可逢低做多，但需警惕短期回调风险",
+  "summary": "多重利好推动BTC突破81000美元，市场情绪乐观，短期延续上攻概率较大",
+  "newsDate": "2026-05-10"
+}

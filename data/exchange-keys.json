@@ -1,0 +1,30 @@
+[
+  {
+    "exchangeId": "binance",
+    "label": "币安实盘",
+    "apiKey": "56acc8848fe2c601f146f928231a4a2f:46ec3643de17afb1673b810622cecc48d78e52789e125069d9ac4f60680f02dba0e76c25d5d3e0ffbbc3a776144fb1487a4fd7755a22e1ae59146bc09bb1107c11728f3ff54e0120764ab43af8e39c55",
+    "secret": "d7312a9196dba81011464897e8467c5d:d4ed5f68af3e8748314ee55931e5abf359bd61ff94fe4231c776bf03cf14fdbb694d38209ef73927c18b7c5e57224c7d8af89e9b36946b0cbfc82e3ca66c245175fcef5b72df7a7c528a25456e643cc7",
+    "testnet": false,
+    "isActive": true,
+    "addedAt": "2026-05-01T01:01:44.179Z"
+  },
+  {
+    "exchangeId": "gate",
+    "label": "Gate实盘",
+    "apiKey": "1b39729e499d8a3e11aac65cfd4a9b1b:bf6b2416dcdee00860b40d2242da2d4dde4d05c8811827b102246cc53cc2e383f49dc418cd631b4704075835c7b9b9a1",
+    "secret": "299865572ac8b661bc6ccf753d2200d3:80cdcf14d7a9e53984b5a5bfa6bd417a1017c7c4a87108dee33d00fe2ced92e9e8844b018ee7e050141c3c02ee4050fcfcf26c7c6c45c36fa8c6e88d8cff076b306070ea664eb20767f6d47a7b632fd4",
+    "testnet": false,
+    "isActive": true,
+    "addedAt": "2026-05-08T04:33:45.747Z"
+  },
+  {
+    "exchangeId": "okx",
+    "label": "OKX实盘",
+    "apiKey": "24952e866dbfd269f92110c98aced842:d7140647c9caa71604a5f532e34bba0298e19d7d0a8aa06a4bd20c46aeeaaa714a93f099624276c9142f5bc1cdbae727",
+    "secret": "e98190ca2e15349dac447f414b77f186:60db4b1ea95737562c85592c28c5c7d1d4afb04b2231bd9fc201be9bb17fba5f66bf0d1804a09f06ffc8edbd749ab8b2",
+    "password": "133afda893c780fa0e1d2cee9d36c0d6:8794347f08e1f317d99705355c4ff8b3",
+    "testnet": false,
+    "isActive": true,
+    "addedAt": "2026-05-08T05:04:56.911Z"
+  }
+]

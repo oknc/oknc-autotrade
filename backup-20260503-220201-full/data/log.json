@@ -1,0 +1,427 @@
+[
+  {
+    "type": "buy",
+    "amountIn": 0.0027,
+    "symbolIn": "BNB",
+    "amountOut": 12079.935946920143,
+    "symbolOut": "SCAM",
+    "actualPriceUSD": 0.00013858427472513812,
+    "txHash": "0xa7c0975c1ad54900375ac51f0ca941958135b0eaf9913e9044a3b38275049991",
+    "gasUsed": 113370,
+    "time": "2026-04-27T18:45:34.366Z"
+  },
+  {
+    "type": "buy",
+    "amountIn": 0.0027,
+    "symbolIn": "BNB",
+    "amountOut": 12077.656249962967,
+    "symbolOut": "SCAM",
+    "actualPriceUSD": 0.0001386157229502095,
+    "txHash": "0x7a2f3e2d67070797aafff6f296a9aeaac165bd56867ecc60aac5ac9de28aa9b0",
+    "gasUsed": 106754,
+    "time": "2026-04-27T18:45:40.838Z"
+  },
+  {
+    "type": "buy",
+    "amountIn": 0.0027,
+    "symbolIn": "BNB",
+    "amountOut": 12075.377198542563,
+    "symbolOut": "SCAM",
+    "actualPriceUSD": 0.00013864187813601635,
+    "txHash": "0x30bd2a160049c9d4e898d01a13986cff144e4c011b98069aab3248a84343d0c8",
+    "gasUsed": 106754,
+    "time": "2026-04-27T18:45:47.359Z"
+  },
+  {
+    "type": "sell",
+    "amountIn": 36232.96939542567,
+    "symbolIn": "SCAM",
+    "amountOut": 0.007467920840066739,
+    "symbolOut": "BNB",
+    "txHash": "0xa1a22bcd4ce044430950d37bcc2bd22c67dcd23203f5bd146fa2a82860b06104",
+    "gasUsed": 116553,
+    "time": "2026-04-27T18:55:07.144Z"
+  },
+  {
+    "type": "buy",
+    "amountIn": 0.002,
+    "symbolIn": "BNB",
+    "amountOut": 2667.207762203798,
+    "symbolOut": "VAULT",
+    "actualPriceUSD": 0.00046546134589009166,
+    "txHash": "0x9f422654684c1ff8253195eb819b0536c0f6d418fd2af8b3257e5508fb91704c",
+    "gasUsed": 164145,
+    "time": "2026-04-27T19:56:34.225Z"
+  },
+  {
+    "type": "buy",
+    "amountIn": 0.002,
+    "symbolIn": "BNB",
+    "amountOut": 11282.770242768558,
+    "symbolOut": "America is Back",
+    "actualPriceUSD": 0.00011012956750931167,
+    "txHash": "0x23a1cf063fc6c2d5cf162aff57c9d21618d7cc143820b99a788dc1e5ee1b3544",
+    "gasUsed": 106754,
+    "time": "2026-04-27T20:25:35.651Z"
+  },
+  {
+    "type": "sell",
+    "amountIn": 11282.770242768558,
+    "symbolIn": "America is Back",
+    "amountOut": 0.001908031518017184,
+    "symbolOut": "BNB",
+    "txHash": "0xd239176dcf4abd911ceea6bbdd756e6f72eefe1780549055e276feeda851173d",
+    "gasUsed": 116553,
+    "time": "2026-04-28T05:01:03.493Z"
+  },
+  {
+    "type": "buy",
+    "amountIn": 0.005,
+    "symbolIn": "BNB",
+    "amountOut": 19555.73750653427,
+    "symbolOut": "agentic",
+    "actualPriceUSD": 0.00015933891142890912,
+    "txHash": "0x6a663b874386e12a91a5398adf1852c443b7f597442cd2c15f7b1b0d5d355373",
+    "gasUsed": 123854,
+    "time": "2026-04-29T03:09:22.103Z"
+  },
+  {
+    "type": "buy",
+    "amountIn": 0.005,
+    "symbolIn": "BNB",
+    "amountOut": 8695.217258647594,
+    "symbolOut": "agentic money",
+    "actualPriceUSD": 0.00035835795472097823,
+    "txHash": "0xe5dc492dc9f4bb8f35af8c1acb53d910573cf6fc43595a00ae92dfa8d8a94440",
+    "gasUsed": 123854,
+    "time": "2026-04-29T03:09:29.104Z"
+  },
+  {
+    "type": "sell",
+    "amountIn": 8695.217258647594,
+    "symbolIn": "agentic money",
+    "amountOut": 0.006463905805306926,
+    "symbolOut": "BNB",
+    "txHash": "0x2b1e124274e0888ba63f4eaa0bfcb5f6030d82c5304ac14e64f02b59a21b2b76",
+    "gasUsed": 110328,
+    "time": "2026-04-29T03:30:24.563Z"
+  },
+  {
+    "type": "sell",
+    "amountIn": 19555.73750653427,
+    "symbolIn": "agentic",
+    "amountOut": 0.004234664411207084,
+    "symbolOut": "BNB",
+    "txHash": "0x3582ca4b1f778a398eaf802878eea5a2357447ae3eee826dc957300c35faa7f0",
+    "gasUsed": 118669,
+    "time": "2026-04-29T03:37:24.541Z"
+  },
+  {
+    "type": "system",
+    "action": "strategy_start",
+    "chain": "unknown",
+    "detail": "策略引擎已启动",
+    "time": "2026-04-30T15:45:19.150Z"
+  },
+  {
+    "type": "system",
+    "action": "strategy_stop",
+    "chain": "unknown",
+    "detail": "策略引擎已停止",
+    "time": "2026-04-30T15:45:28.839Z"
+  },
+  {
+    "type": "system",
+    "action": "strategy_start",
+    "chain": "unknown",
+    "detail": "策略引擎已启动",
+    "time": "2026-04-30T15:45:36.075Z"
+  },
+  {
+    "type": "system",
+    "action": "strategy_stop",
+    "chain": "unknown",
+    "detail": "策略引擎已停止",
+    "time": "2026-04-30T15:45:38.975Z"
+  },
+  {
+    "type": "system",
+    "action": "strategy_start",
+    "chain": "unknown",
+    "detail": "策略引擎已启动",
+    "time": "2026-04-30T15:45:41.796Z"
+  },
+  {
+    "type": "system",
+    "action": "strategy_stop",
+    "chain": "unknown",
+    "detail": "策略引擎已停止",
+    "time": "2026-04-30T15:45:46.750Z"
+  },
+  {
+    "type": "system",
+    "action": "strategy_start",
+    "chain": "unknown",
+    "detail": "策略引擎已启动",
+    "time": "2026-04-30T15:49:54.048Z"
+  },
+  {
+    "type": "system",
+    "action": "strategy_stop",
+    "chain": "unknown",
+    "detail": "策略引擎已停止",
+    "time": "2026-04-30T15:50:10.044Z"
+  },
+  {
+    "type": "system",
+    "action": "strategy_start",
+    "chain": "unknown",
+    "detail": "策略引擎已启动",
+    "time": "2026-04-30T15:50:15.656Z"
+  },
+  {
+    "type": "system",
+    "action": "strategy_start",
+    "chain": "unknown",
+    "detail": "策略引擎已启动",
+    "time": "2026-04-30T15:52:26.810Z"
+  },
+  {
+    "type": "system",
+    "action": "strategy_start",
+    "chain": "unknown",
+    "detail": "策略引擎已启动",
+    "time": "2026-04-30T15:53:29.262Z"
+  },
+  {
+    "type": "system",
+    "action": "strategy_stop",
+    "chain": "unknown",
+    "detail": "策略引擎已停止",
+    "time": "2026-04-30T15:53:33.875Z"
+  },
+  {
+    "type": "system",
+    "action": "strategy_start",
+    "chain": "unknown",
+    "detail": "策略引擎已启动",
+    "time": "2026-04-30T15:55:26.123Z"
+  },
+  {
+    "type": "system",
+    "action": "strategy_start",
+    "chain": "unknown",
+    "detail": "策略引擎已启动",
+    "time": "2026-04-30T15:58:02.828Z"
+  },
+  {
+    "type": "buy",
+    "mode": "manual",
+    "amountIn": 0.005,
+    "symbolIn": "SOL",
+    "amountOut": 201.723697,
+    "symbolOut": "Wish",
+    "txHash": "2BBc8bs3cR8teNC16QdRiAFRp24MPtF2yva8RBfqX3CZuZo3113BhdYFJMKHWCXi7fsTjktqTzWRsXN4b3WM1C3f",
+    "actualPriceUSD": 0.0020666882780757284,
+    "time": "2026-04-30T15:59:05.311Z"
+  },
+  {
+    "type": "system",
+    "action": "strategy_start",
+    "chain": "unknown",
+    "detail": "策略引擎已启动",
+    "time": "2026-04-30T16:05:39.839Z"
+  },
+  {
+    "type": "system",
+    "action": "strategy_start",
+    "chain": "unknown",
+    "detail": "策略引擎已启动",
+    "time": "2026-04-30T16:11:58.799Z"
+  },
+  {
+    "type": "system",
+    "action": "strategy_start",
+    "chain": "unknown",
+    "detail": "策略引擎已启动",
+    "time": "2026-04-30T16:16:23.922Z"
+  },
+  {
+    "type": "system",
+    "action": "strategy_start",
+    "chain": "unknown",
+    "detail": "策略引擎已启动",
+    "time": "2026-04-30T16:16:26.523Z"
+  },
+  {
+    "type": "system",
+    "action": "strategy_start",
+    "chain": "unknown",
+    "detail": "策略引擎已启动",
+    "time": "2026-04-30T16:33:27.118Z"
+  },
+  {
+    "type": "sell",
+    "mode": "manual",
+    "amountIn": 0,
+    "symbolIn": "Wish",
+    "amountOut": 0,
+    "symbolOut": "SOL",
+    "txHash": "",
+    "time": "2026-04-30T16:33:37.458Z"
+  },
+  {
+    "type": "system",
+    "action": "strategy_stop",
+    "chain": "unknown",
+    "detail": "策略引擎已停止",
+    "time": "2026-04-30T16:35:00.303Z"
+  },
+  {
+    "type": "system",
+    "action": "strategy_start",
+    "chain": "unknown",
+    "detail": "策略引擎已启动",
+    "time": "2026-04-30T16:47:15.205Z"
+  },
+  {
+    "type": "system",
+    "action": "strategy_stop",
+    "chain": "unknown",
+    "detail": "策略引擎已停止",
+    "time": "2026-04-30T16:48:04.328Z"
+  },
+  {
+    "type": "system",
+    "action": "strategy_start",
+    "chain": "unknown",
+    "detail": "策略引擎已启动",
+    "time": "2026-04-30T16:48:10.480Z"
+  },
+  {
+    "type": "buy",
+    "amountIn": 0.005,
+    "symbolIn": "BNB",
+    "amountOut": 17387.804301908913,
+    "symbolOut": "🐵AI",
+    "actualPriceUSD": 0.00017700976239911896,
+    "txHash": "0x6ee9b5b56542d848fa84f5d755d944d88496f515130e7126b1de039d8e12a0b4",
+    "gasUsed": 121871,
+    "time": "2026-04-30T21:52:20.386Z"
+  },
+  {
+    "type": "buy",
+    "mode": "manual",
+    "amountIn": 0.005,
+    "symbolIn": "BNB",
+    "amountOut": 17387.804301908913,
+    "symbolOut": "🐵AI",
+    "txHash": "0x6ee9b5b56542d848fa84f5d755d944d88496f515130e7126b1de039d8e12a0b4",
+    "actualPriceUSD": 0.00017700976239911896,
+    "time": "2026-04-30T21:52:20.388Z"
+  },
+  {
+    "type": "sell",
+    "amountIn": 17387.804301908913,
+    "symbolIn": "🐵AI",
+    "amountOut": 4.3783245462e-8,
+    "symbolOut": "BNB",
+    "txHash": "0x6d3935f0d69c631b5ff6c92a028e59bda3f21b5906b41c058cefa84f392be26a",
+    "gasUsed": 115552,
+    "time": "2026-04-30T21:52:33.118Z"
+  },
+  {
+    "type": "sell",
+    "mode": "auto",
+    "amountIn": 17387.804301908913,
+    "symbolIn": "🐵AI",
+    "amountOut": 4.3783245462e-8,
+    "symbolOut": "BNB",
+    "txHash": "0x6d3935f0d69c631b5ff6c92a028e59bda3f21b5906b41c058cefa84f392be26a",
+    "time": "2026-04-30T21:52:33.120Z"
+  },
+  {
+    "type": "system",
+    "action": "strategy_stop",
+    "chain": "unknown",
+    "detail": "策略引擎已停止",
+    "time": "2026-05-01T00:09:05.163Z"
+  },
+  {
+    "type": "system",
+    "action": "strategy_start",
+    "chain": "unknown",
+    "detail": "策略引擎已启动",
+    "time": "2026-05-01T00:09:11.288Z"
+  },
+  {
+    "type": "system",
+    "action": "strategy_start",
+    "chain": "unknown",
+    "detail": "策略引擎已启动",
+    "time": "2026-05-01T01:04:45.148Z"
+  },
+  {
+    "type": "system",
+    "action": "strategy_stop",
+    "chain": "unknown",
+    "detail": "策略引擎已停止",
+    "time": "2026-05-01T01:04:49.188Z"
+  },
+  {
+    "type": "system",
+    "action": "strategy_start",
+    "chain": "unknown",
+    "detail": "策略引擎已启动",
+    "time": "2026-05-01T04:38:21.753Z"
+  },
+  {
+    "type": "system",
+    "action": "strategy_start",
+    "chain": "unknown",
+    "detail": "策略引擎已启动",
+    "time": "2026-05-01T09:46:41.216Z"
+  },
+  {
+    "type": "system",
+    "action": "strategy_stop",
+    "chain": "unknown",
+    "detail": "策略引擎已停止",
+    "time": "2026-05-01T09:46:44.673Z"
+  },
+  {
+    "type": "system",
+    "action": "strategy_start",
+    "chain": "unknown",
+    "detail": "策略引擎已启动",
+    "time": "2026-05-02T04:25:22.387Z"
+  },
+  {
+    "type": "system",
+    "action": "strategy_start",
+    "chain": "unknown",
+    "detail": "策略引擎已启动",
+    "time": "2026-05-02T09:27:03.667Z"
+  },
+  {
+    "type": "system",
+    "action": "strategy_stop",
+    "chain": "unknown",
+    "detail": "策略引擎已停止",
+    "time": "2026-05-02T09:33:08.603Z"
+  },
+  {
+    "type": "system",
+    "action": "strategy_start",
+    "chain": "unknown",
+    "detail": "策略引擎已启动",
+    "time": "2026-05-02T09:33:10.213Z"
+  },
+  {
+    "type": "system",
+    "action": "strategy_stop",
+    "chain": "unknown",
+    "detail": "策略引擎已停止",
+    "time": "2026-05-02T09:33:22.806Z"
+  }
+]

@@ -1,0 +1,7 @@
+com.oknc.trade.app-pngs-0 /build/app/build/generated/res/pngs/debug
+com.oknc.trade.app-resValues-1 /build/app/build/generated/res/resValues/debug
+com.oknc.trade.app-packageDebugResources-2 /build/app/build/intermediates/incremental/debug/packageDebugResources/merged.dir
+com.oknc.trade.app-packageDebugResources-3 /build/app/build/intermediates/incremental/debug/packageDebugResources/stripped.dir
+com.oknc.trade.app-merged_res-4 /build/app/build/intermediates/merged_res/debug
+com.oknc.trade.app-debug-5 /build/app/src/debug/res
+com.oknc.trade.app-main-6 /build/app/src/main/res

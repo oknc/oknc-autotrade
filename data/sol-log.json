@@ -1,0 +1,38 @@
+[
+  {
+    "type": "buy",
+    "chain": "sol",
+    "amountIn": 0.01,
+    "symbolIn": "SOL",
+    "amountOut": 1008.113012,
+    "symbolOut": "ByqipP...",
+    "actualPriceUSD": 0.0008260978581635448,
+    "txHash": "5f2DfJZdNYeCtyHq73mJn9nUPNVa7HtoCpykkEAS2dyH3x5a21H1nLszCjfNzu7LPpbj7vxVZ8m9AWYFwJ4qYHSe",
+    "gasUsed": 0,
+    "time": "2026-04-30T12:33:54.370Z"
+  },
+  {
+    "type": "buy",
+    "chain": "sol",
+    "amountIn": 0.01,
+    "symbolIn": "SOL",
+    "amountOut": 6627.092647,
+    "symbolOut": "2LUZGz...",
+    "actualPriceUSD": 0.0001254547120865081,
+    "txHash": "qaBrArXpcg4dWZTiAVVGN9U1bfUzG4HTZqejDDqgRAWfGwr34giPtdxPHMiiSEJnoMkAKsuS8591cpX9yrCxY4R",
+    "gasUsed": 0,
+    "time": "2026-04-30T15:00:59.981Z"
+  },
+  {
+    "type": "buy",
+    "chain": "sol",
+    "amountIn": 0.005,
+    "symbolIn": "SOL",
+    "amountOut": 201.723697,
+    "symbolOut": "2ssMot...",
+    "actualPriceUSD": 0.0020666882780757284,
+    "txHash": "2BBc8bs3cR8teNC16QdRiAFRp24MPtF2yva8RBfqX3CZuZo3113BhdYFJMKHWCXi7fsTjktqTzWRsXN4b3WM1C3f",
+    "gasUsed": 0,
+    "time": "2026-04-30T15:59:05.309Z"
+  }
+]
