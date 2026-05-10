@@ -494,6 +494,7 @@ const closeResult = await cexEngine.closePosition(symbol, posSide);
               entryPrice: closeResult.entryPrice,
               contracts: currentPosition?.contracts,
             });
+            if (closeResult.pnlPercent !== undefined) adaptive.recordReturn(symbol, closeResult.pnlPercent);
             await riskManager.onPositionClosed(symbol, posSide, closeResult.realizedPnl, closeResult.pnlPercent, getExchangeId(symbol));
           } else {
             appendCexLog('auto_close', `[${cexEngine.getExchangeLabel(getExchangeId(symbol))}] 策略平${posSide === 'long' ? '多' : '空'} ${symbol} ${(currentPosition?.contracts || '?').toString().padEnd(6)}张 (信号反转)`, { contracts: currentPosition?.contracts });
@@ -514,6 +515,13 @@ const closeResult = await cexEngine.closePosition(symbol, posSide);
       const riskStatus = await riskManager.getRiskStatus();
       if (!riskStatus.canTrade) {
         console.log(`[Strategy] ⛔ ${symbol}: 风控拦截 (${riskStatus.dailyPnlPercent.toFixed(1)}%)`);
+        continue;
+      }
+
+      // 夏普比率检查
+      const sharpeCheck = adaptive.shouldTradeSymbol ? adaptive.shouldTradeSymbol(symbol) : { canTrade: true };
+      if (!sharpeCheck.canTrade) {
+        console.log(`[Strategy] ⛔ ${symbol}: 夏普拦截 (${sharpeCheck.sharpe}) — ${sharpeCheck.reason}`);
         continue;
       }
 
@@ -600,6 +608,19 @@ const closeResult = await cexEngine.closePosition(symbol, posSide);
           console.log(`[Strategy] ⏸ ${symbol}: 需保证金$${neededMarginValue.toFixed(2)} > 可用$${cappedCap.toFixed(2)}, 跳过`);
           continue;
         }
+
+        // ====== 开仓决策清单（交易员视角） ======
+        console.log(`[Trader] 📋 ===== 开仓决策清单 ${symbol} =====`);
+        console.log(`[Trader] 📊 信号: ${combined.direction} (趋势${trendSignal.confidence}%+均值${meanRevSignal.confidence}%)`);
+        console.log(`[Trader] 📊 市场状态: ${marketRegime} ${regimeConfirmed ? '✅已确认' : '⏳待确认'}`);
+        console.log(`[Trader] 📊 风控: ${riskStatus.dailyPnlPercent.toFixed(1)}% ${riskStatus.canTrade ? '✅通过' : '⛔拦截'}`);
+        console.log(`[Trader] 📊 夏普: ${sharpeCheck.sharpe} (${sharpeCheck.reason})`);
+        console.log(`[Trader] 📊 资金: $${cappedCap.toFixed(2)} | 方向: ${side} | 张数: ${contracts} | 杠杆: ${dynLeverage}x`);
+        console.log(`[Trader] 📊 仓位价值: $${positionValue.toFixed(2)} | 保证金: $${neededMarginValue.toFixed(2)}`);
+        console.log(`[Trader] 📊 情报调整: 仓位${((intelFactors?.positionMultiplier||1)*100-100).toFixed(0) > 0 ? '+' : ''}${((intelFactors?.positionMultiplier||1)*100-100).toFixed(0)}% | 杠杆${((intelFactors?.leverageMultiplier||1)*100-100).toFixed(0) > 0 ? '+' : ''}${((intelFactors?.leverageMultiplier||1)*100-100).toFixed(0)}%`);
+        console.log(`[Trader] 📊 ATD策略: ${adaptivePos.reason}`);
+        console.log(`[Trader] 📊 高级别趋势: ${getHigherTFtrend ? getHigherTFtrend(symbol) : 'N/A'}`);
+        console.log(`[Trader] 🚀 执行开仓: ${symbol} ${side} ${contracts}张 @${dynLeverage}x`);
 
         console.log(`[Strategy] 🚀 ${symbol}: 开${side}仓 ${contracts} (${positionValue.toFixed(2)}U @ ${styleName}) ${adaptivePos.reason}`);
         const result = await cexEngine.openPosition(symbol, side, contracts, getExchangeId(symbol), {
@@ -855,6 +876,7 @@ async function checkPositions() {
             const closeResult = await cexEngine.closePosition(symbol, pos.side);
             if (closeResult.success) {
               console.log(`[Trail] 🛑 ${symbol}: 硬底保护触发强制平仓成功 PnL:$${closeResult.realizedPnl}`);
+              if (closeResult.pnlPercent !== undefined) adaptive.recordReturn(symbol, closeResult.pnlPercent);
               appendCexLog('strategy_close', `[${cexEngine.getExchangeLabel(getExchangeId(symbol))}] 硬底保护强平 ${symbol} ${contracts.toString().padEnd(6)}张 PnL:${closeResult.realizedPnl?.toFixed(2)||'?'}`, { type: 'hard_floor_forced', realizedPnl: closeResult.realizedPnl, closePrice: closeResult.closePrice, pnlPercent: closeResult.pnlPercent, contracts });
             } else {
               console.log(`[Trail] ❌ ${symbol}: 硬底保护强制平仓失败: ${closeResult.error}`);
@@ -1022,6 +1044,7 @@ async function checkPositions() {
           console.log(`[Trail] ⏳ ${symbol}: 止损冷却 ${STOP_LOSS_COOLDOWN_MS/60000}分钟`);
           const closeResult = await cexEngine.closePosition(symbol, pos.side, getExchangeId(symbol));
           if (closeResult.success && closeResult.realizedPnl !== undefined) {
+            if (closeResult.pnlPercent !== undefined) adaptive.recordReturn(symbol, closeResult.pnlPercent);
             await riskManager.onPositionClosed(symbol, pos.side, closeResult.realizedPnl, closeResult.pnlPercent, getExchangeId(symbol));
             appendCexLog('auto_close', `[${cexEngine.getExchangeLabel(getExchangeId(symbol))}] 止损平${pos.side === 'long' ? '多' : '空'} ${symbol} ${contracts.toString().padEnd(6)}张 @${closeResult.closePrice}`, {
               realizedPnl: closeResult.realizedPnl,
@@ -1036,6 +1059,7 @@ async function checkPositions() {
           console.log(`[Trail] ✅ ${symbol}: 触发止盈! 现价 $${currentPrice.toFixed(2)} ≥ 止盈 $${state.tpPrice.toFixed(2)}`);
           const closeResult = await cexEngine.closePosition(symbol, pos.side, getExchangeId(symbol));
           if (closeResult.success && closeResult.realizedPnl !== undefined) {
+            if (closeResult.pnlPercent !== undefined) adaptive.recordReturn(symbol, closeResult.pnlPercent);
             await riskManager.onPositionClosed(symbol, pos.side, closeResult.realizedPnl, closeResult.pnlPercent, getExchangeId(symbol));
             appendCexLog('auto_close', `[${cexEngine.getExchangeLabel(getExchangeId(symbol))}] 止盈平${pos.side === 'long' ? '多' : '空'} ${symbol} ${contracts.toString().padEnd(6)}张 @${closeResult.closePrice}`, {
               realizedPnl: closeResult.realizedPnl,

@@ -30,6 +30,7 @@ import {
 import * as solEngine from './sol-engine.js';
 import * as cexEngine from './cex-engine.js';
 import * as cexStrategy from "./cex-strategy.js";
+import * as adaptive from './cex-adaptive.js';
 import * as riskManager from "./risk-manager.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -812,6 +813,20 @@ app.get('/api/cex/strategy/trail-state', (req, res) => {
 });
 
 // 策略模式（双币/单币）切换
+// 夏普比率 API
+app.get('/api/cex/strategy/sharpe', (req, res) => {
+  try {
+    const symbol = req.query.symbol;
+    if (symbol) {
+      res.json({ symbol, sharpe: adaptive.calcSharpeRatio(symbol) });
+    } else {
+      res.json(adaptive.getAllSharpeRatios());
+    }
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get('/api/cex/strategy/mode', (req, res) => {
   try {
     res.json(cexStrategy.getStrategyMode());

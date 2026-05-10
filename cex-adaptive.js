@@ -213,3 +213,86 @@ export function getAdaptiveStatus() {
 }
 
 export function resetTradeHistory() { tradeHistory = []; }
+
+// ============ 夏普比率追踪 ============
+
+// 每个币种的PnL序列，用于计算夏普比率
+// { 'BTC/USDT:USDT': [0.5, -0.3, 1.2, ...] } — 每笔平仓的真实PnL百分比
+let symbolReturns = {};
+
+/**
+ * 记录一笔平仓的收益率
+ * @param {string} symbol 
+ * @param {number} pnlPercent — 百分比形式（如 1.5 表示 +1.5%）
+ */
+export function recordReturn(symbol, pnlPercent) {
+  if (!symbolReturns[symbol]) symbolReturns[symbol] = [];
+  symbolReturns[symbol].push(pnlPercent);
+  // 只保留最近50笔
+  if (symbolReturns[symbol].length > 50) {
+    symbolReturns[symbol].shift();
+  }
+}
+
+/**
+ * 计算某个币种的夏普比率
+ * 夏普 = (平均收益率 - 无风险利率) / 收益率标准差
+ * 无风险利率约等于 0（加密货币市场）
+ * @param {string} symbol 
+ * @param {number} [annualScale=365] — 按日换算年化（默认365天）
+ * @returns {{ sharpe: number, avgReturn: number, stdDev: number, count: number }}
+ */
+export function calcSharpeRatio(symbol, annualScale = 365) {
+  const returns = symbolReturns[symbol];
+  if (!returns || returns.length < 3) {
+    return { sharpe: 0, avgReturn: 0, stdDev: 0, count: returns?.length || 0, reason: '数据不足(<3笔)' };
+  }
+  
+  const avgReturn = returns.reduce((a, b) => a + b, 0) / returns.length;
+  const variance = returns.reduce((sum, r) => sum + (r - avgReturn) ** 2, 0) / (returns.length - 1);
+  const stdDev = Math.sqrt(variance);
+  
+  if (stdDev === 0) return { sharpe: 0, avgReturn, stdDev, count: returns.length, reason: '零波动' };
+  
+  // 日频夏普，然后年化
+  const dailySharpe = avgReturn / stdDev;
+  const sharpe = dailySharpe * Math.sqrt(annualScale);
+  
+  return {
+    sharpe: parseFloat(sharpe.toFixed(2)),
+    avgReturn: parseFloat(avgReturn.toFixed(2)),
+    stdDev: parseFloat(stdDev.toFixed(2)),
+    count: returns.length,
+    reason: sharpe > 1 ? '优秀' : sharpe > 0.5 ? '良好' : sharpe > 0 ? '一般' : '需优化',
+  };
+}
+
+/**
+ * 获取所有币种的夏普比率
+ * @returns {Object} { 'BTC/USDT:USDT': { sharpe, ... }, ... }
+ */
+export function getAllSharpeRatios() {
+  const result = {};
+  for (const sym of Object.keys(symbolReturns)) {
+    result[sym] = calcSharpeRatio(sym);
+  }
+  return result;
+}
+
+/**
+ * 根据夏普比率判断是否继续交易该币种
+ * @param {string} symbol 
+ * @param {number} [minSharpe=-0.5] — 低于此值建议暂停交易
+ * @returns {{ canTrade: boolean, sharpe: number, reason: string }}
+ */
+export function shouldTradeSymbol(symbol, minSharpe = -0.5) {
+  const stats = calcSharpeRatio(symbol);
+  if (stats.count < 3) return { canTrade: true, sharpe: stats.sharpe, reason: '数据不足，允许交易' };
+  if (stats.sharpe < minSharpe) {
+    return { canTrade: false, sharpe: stats.sharpe, reason: `夏普${stats.sharpe}<${minSharpe}，建议暂停` };
+  }
+  return { canTrade: true, sharpe: stats.sharpe, reason: stats.reason };
+}
+
+export function getSymbolReturns() { return symbolReturns; }
+export function resetSymbolReturns() { symbolReturns = {}; }
