@@ -850,6 +850,22 @@ app.post('/api/cex/strategy/mode', async (req, res) => {
     if (!result.success) {
       return res.status(400).json(result);
     }
+    // 持久化模式到 .env
+    if (result.success) {
+      try {
+        const fs = require("fs");
+        const envPath = "/root/autotrade/.env";
+        let env = fs.readFileSync(envPath, "utf-8");
+        if (/CEX_STRATEGY_MODE=/.test(env)) {
+          env = env.replace(/CEX_STRATEGY_MODE=.*/, "CEX_STRATEGY_MODE=" + mode);
+        } else {
+          env += "\nCEX_STRATEGY_MODE=" + mode + "\n";
+        }
+        fs.writeFileSync(envPath, env);
+      } catch(e) {
+        console.log("[Strategy] \u26a0\ufe0f \u6301\u4e85\u5316\u6a21\u5f0f\u5931\u8d25:", e.message);
+      }
+    }
     // 获取新模式的交易对
     const modeInfo = cexStrategy.getStrategyMode();
     const symbols = modeInfo.mode === 'dual' 

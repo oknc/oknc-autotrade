@@ -22,7 +22,7 @@ let symbolExchange = {};      // { 'ETH/USDT': 'binance'|'gate' } — 每个交�
 let currentSignals = {};      // { 'ETH/USDT': { trend, meanReversion, combined, decision } }
 let positionHistory = [];     // 策略开平记录
 let autoOpenedPositions = new Set(); // 跟踪策略自动开仓的symbol
-let strategyMode = 'dual';   // 'dual' = 双币(BTC+ETH), 'single' = 单币
+let strategyMode = process.env.CEX_STRATEGY_MODE || 'dual';   // 'dual' = 双币(BTC+ETH), 'single' = 单币
 let primarySymbol = 'BTC/USDT:USDT'; // 单币模式下的主交易对
 let unsubscribeFns = [];      // WebSocket 取消订阅函数
 
@@ -1034,6 +1034,36 @@ async function checkPositions() {
             });
             console.log(`[Trail] 🔒 ${symbol}: 分段止盈完成，剩余50%仓位SL保本 $${entrySl.toFixed(2)}`);
           }
+        }
+      }
+
+      // ====== GTFO保护：追踪激活后利润回吐至保本线附近 → 强制平仓 ======
+      if (state.trailActivated) {
+        const currentPnLPercent = isLong
+          ? (currentPrice - pos.entryPrice) / pos.entryPrice
+          : (pos.entryPrice - currentPrice) / pos.entryPrice;
+        const GTFO_THRESHOLD = 0.002; // 0.2%
+        if (currentPnLPercent < GTFO_THRESHOLD) {
+          console.log('[Trail] 🛑 ' + symbol + ': GTFO保护触发（利润已回吐至' + (currentPnLPercent*100).toFixed(1) + '%）');
+          try {
+            const closeResult = await cexEngine.closePosition(symbol, pos.side, getExchangeId(symbol));
+            if (closeResult.success) {
+              if (closeResult.pnlPercent !== undefined) adaptive.recordReturn(symbol, closeResult.pnlPercent);
+              await riskManager.onPositionClosed(symbol, pos.side, closeResult.realizedPnl, closeResult.pnlPercent, getExchangeId(symbol));
+              appendCexLog('strategy_close', '[' + cexEngine.getExchangeLabel(getExchangeId(symbol)) + '] GTFO保护平' + (pos.side === 'long' ? '多' : '空') + ' ' + symbol + ' ' + contracts.toString().padEnd(6) + '张 @' + closeResult.closePrice, {
+                realizedPnl: closeResult.realizedPnl,
+                pnlPercent: closeResult.pnlPercent,
+                triggerType: 'gtfo_protection',
+                contracts,
+              });
+              console.log('[Risk] 📝 平仓记录: ' + symbol + ' ' + pos.side + ' PnL:$' + (closeResult.realizedPnl?.toFixed(4)||'?') + ' | GTFO保护');
+            } else {
+              console.log('[Trail] ❌ ' + symbol + ': GTFO平仓失败: ' + closeResult.error);
+            }
+          } catch (err) {
+            console.log('[Trail] ❌ ' + symbol + ': GTFO平仓异常: ' + err.message);
+          }
+          continue;
         }
       }
 
