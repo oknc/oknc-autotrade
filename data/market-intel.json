@@ -1,40 +1,64 @@
 {
-  "timestamp": "2026-05-10T04:22:39.613Z",
+  "timestamp": "2026-05-11T16:30:00.000Z",
   "sentimentScore": 80,
   "sentimentLabel": "bullish",
   "keyEvents": [
     {
       "asset": "BTC",
       "impact": "positive",
+      "weight": 0.95,
+      "description": "Tom Lee迈阿密表态：若BTC在5月底高于7.6万美金则标志熊市结束，BTC今日报$82,037"
+    },
+    {
+      "asset": "BTC",
+      "impact": "positive",
       "weight": 0.9,
-      "description": "BTC突破81000美元，24小时涨幅3.2%"
+      "description": "比特币ETF两天内吸引9.99亿美元资金流入，累积AUM创2026新高"
+    },
+    {
+      "asset": "整体市场",
+      "impact": "positive",
+      "weight": 0.85,
+      "description": "BTC、ETH、BNB、SOL等山寨币全线回暖，市场情绪好转"
+    },
+    {
+      "asset": "DeFi",
+      "impact": "positive",
+      "weight": 0.7,
+      "description": "DeFi压力测试平稳结束，没有任何系统崩溃"
     },
     {
       "asset": "ETH",
-      "impact": "positive",
-      "weight": 0.8,
-      "description": "ETH ETF资金持续净流入，本周累计4.5亿美元"
+      "impact": "neutral",
+      "weight": 0.6,
+      "description": "BTC上涨但ETH表现滞后，投资者资金涌向山寨币板块"
     },
     {
       "asset": "整体市场",
-      "impact": "positive",
-      "weight": 0.7,
-      "description": "美联储维持利率不变，市场预期6月降息概率升至65%"
+      "impact": "neutral",
+      "weight": 0.5,
+      "description": "美联储降息预期被多家银行取消，但比特币市场未受影响"
     },
     {
-      "asset": "整体市场",
-      "impact": "positive",
-      "weight": 0.8,
-      "description": "香港批准比特币现货ETF"
+      "asset": "BTC",
+      "impact": "neutral",
+      "weight": 0.5,
+      "description": "大型科技公司财报带动乐观情绪，BTC反弹但短期压力仍在"
+    },
+    {
+      "asset": "BTC",
+      "impact": "neutral",
+      "weight": 0.4,
+      "description": "比特币未能实现重大突破，历史经验提醒市场需保持谨慎"
     }
   ],
   "marketFactors": {
     "macro": "positive",
-    "regulatory": "positive",
-    "narrative": "降息预期与监管利好推动加密资产上涨"
+    "regulatory": "neutral",
+    "narrative": "BTC站稳7.6万确认熊转牛，ETF资金大幅流入，山寨币跟随回暖"
   },
   "riskLevel": "medium",
-  "actionableAdvice": "关注BTC能否站稳81000美元，ETH ETF持续流入可逢低做多，但需警惕短期回调风险",
-  "summary": "多重利好推动BTC突破81000美元，市场情绪乐观，短期延续上攻概率较大",
-  "newsDate": "2026-05-10"
+  "actionableAdvice": "若BTC维持在7.6万上方则确认牛市重启，可逢回调加仓，关注ETH补涨机会",
+  "summary": "Tom Lee确认牛熊分界线，BTC ETF两天涌入$10亿，市场全线上涨，情绪偏乐观",
+  "newsDate": "2026-05-11"
 }

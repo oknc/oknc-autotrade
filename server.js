@@ -1217,6 +1217,8 @@ app.post('/api/cex/intel', async (req, res) => {
 async function main() {
   console.log('╔══════════════════════════════════════════╗');
   console.log('║    OKNC 自动土狗交易系统 v3.0            ║');
+  // load cached market intel
+  cexIntel.loadIntel();
   console.log('║    多链 · 多钱包 · 自动交易              ║');
   console.log('║    BSC + Solana · 密码认证 · PWA         ║');
   console.log('╚══════════════════════════════════════════╝');
@@ -1292,7 +1294,10 @@ async function main() {
   (async () => {
     try {
       console.log('[Server] 🚀 自动启动 CEX 合约策略...');
-      const symbols = ['BTC/USDT:USDT', 'ETH/USDT:USDT'];
+      const modeInfo = cexStrategy.getStrategyMode();
+      const symbols = modeInfo.mode === 'dual'
+        ? ['BTC/USDT:USDT', 'ETH/USDT:USDT']
+        : [modeInfo.primarySymbol];
       const result = await cexStrategy.startStrategy(symbols);
       if (result.success) {
         appendCexLog('strategy_start', '[币安] 策略启动 BTC/USDT, ETH/USDT (自动)');
