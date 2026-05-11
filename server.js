@@ -67,7 +67,7 @@ function generateToken(role = 'admin') {
 
 // 认证中间件
 function authMiddleware(req, res, next) {
-  if (req.path === '/api/auth/login' || req.path === '/api/auth/check') {
+  if (req.path === '/api/auth/login' || req.path === '/api/auth/check' || req.path === '/api/cex/intel') {
     return next();
   }
   if (!req.path.startsWith('/api/')) {
@@ -1195,6 +1195,7 @@ app.post('/api/cex/log', (req, res) => {
 // ============ 情报系统 API ============
 
 app.get('/api/cex/intel', (req, res) => {
+res.header('Access-Control-Allow-Origin', '*');
   res.json(cexIntel.getIntel());
 });
 
