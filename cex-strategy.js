@@ -141,19 +141,31 @@ function calcBollingerBands(data, period = BB_PERIOD, std = BB_STD) {
  * 防止逆大趋势开仓
  */
 function getHigherTFtrend(symbol) {
-  // 尝试1小时K线
-  let klines = cexData.getKlines(symbol, '1h', 30);
-  if (!klines || klines.length < 20) {
-    klines = cexData.getKlines(symbol, '15m', 80);
+  // 使用15分钟K线（更快响应），配合EMA8/21更敏感
+  let klines = cexData.getKlines(symbol, '15m', 96);
+  if (!klines || klines.length < 30) {
+    klines = cexData.getKlines(symbol, '1h', 30);
     if (!klines || klines.length < 20) return 'neutral';
   }
   
   const closes = klines.map(k => k.close);
   const currentPrice = closes[closes.length - 1];
   
-  // EMA12 / EMA26 (小时级别比15分钟可靠得多)
-  const emaFast = calcEMA(closes, 12);
-  const emaSlow = calcEMA(closes, 26);
+  // 短期动量检测：检查最近12根K线（15m=3小时）有多少根在下跌
+  const recent = closes.slice(-12);
+  let downCount = 0, upCount = 0;
+  for (let i = 1; i < recent.length; i++) {
+    if (recent[i] < recent[i-1]) downCount++;
+    else if (recent[i] > recent[i-1]) upCount++;
+  }
+  // 如果最近12根K线中下跌占比≥75%，直接判定为空头
+  if (downCount >= 9) return 'short';
+  // 如果最近12根K线中上涨占比≥75%，直接判定为多头
+  if (upCount >= 9) return 'long';
+  
+  // EMA8 / EMA21 (缩短周期，更快响应)
+  const emaFast = calcEMA(closes, 8);
+  const emaSlow = calcEMA(closes, 21);
   if (emaFast === null || emaSlow === null) return 'neutral';
   
   // 价格在两条EMA之上且金叉 = 多头趋势
@@ -164,6 +176,10 @@ function getHigherTFtrend(symbol) {
   // 模糊状态：偏向当前价格相对两条EMA的位置
   if (currentPrice > emaSlow) return 'weak_long';
   if (currentPrice < emaSlow) return 'weak_short';
+  
+  // 如果EMA无明显偏向，用短期动量作为最终判决
+  if (downCount > upCount) return 'weak_short';
+  if (upCount > downCount) return 'weak_long';
   return 'neutral';
 }
 
@@ -369,14 +385,20 @@ function combineSignals(trend, meanRev, style, symbol) {
       if (isAgainst) { confidence = Math.floor(confidence * 0.4); reasons.push(`⚠️逆1h趋势降权`); }
       action = confidence >= 30 ? (direction === 'long' ? 'open_long' : 'open_short') : 'hold';
     } else if (meanRev.direction !== 'neutral' && meanRev.confidence >= 50) {
-      direction = meanRev.direction;
-      confidence = meanRev.confidence;
-      reasons = [`均值回归:${meanRev.reason}`];
       const htf = getHigherTFtrend(symbol);
-      const isAgainst = (direction === 'long' && (htf === 'short' || htf === 'weak_short'))
-                     || (direction === 'short' && (htf === 'long' || htf === 'weak_long'));
-      if (isAgainst) { confidence = Math.floor(confidence * 0.5); reasons.push(`⚠️逆1h趋势降权`); }
-      action = confidence >= 30 ? (direction === 'long' ? 'open_long' : 'open_short') : 'hold';
+      const isAgainst = (meanRev.direction === 'long' && (htf === 'short' || htf === 'weak_short'))
+                     || (meanRev.direction === 'short' && (htf === 'long' || htf === 'weak_long'));
+      // 高级别趋势为firm(short/long)时，逆趋势的均值回归直接拦截——不逆势抄底/摸顶
+      if (isAgainst && (htf === 'long' || htf === 'short')) {
+        reasons = [`均值回归:${meanRev.reason}`, `🚫高级别趋势${htf}，逆势均值回归拦截`];
+        action = 'hold';
+      } else {
+        direction = meanRev.direction;
+        confidence = meanRev.confidence;
+        reasons = [`均值回归:${meanRev.reason}`];
+        if (isAgainst) { confidence = Math.floor(confidence * 0.5); reasons.push(`⚠️逆1h趋势(${htf})降权`); }
+        action = confidence >= 30 ? (direction === 'long' ? 'open_long' : 'open_short') : 'hold';
+      }
     }
   }
 
