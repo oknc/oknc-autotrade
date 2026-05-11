@@ -22,7 +22,7 @@ let symbolExchange = {};      // { 'ETH/USDT': 'binance'|'gate' } — 每个交�
 let currentSignals = {};      // { 'ETH/USDT': { trend, meanReversion, combined, decision } }
 let positionHistory = [];     // 策略开平记录
 let autoOpenedPositions = new Set(); // 跟踪策略自动开仓的symbol
-let strategyMode = process.env.CEX_STRATEGY_MODE || 'dual';   // 'dual' = 双币(BTC+ETH), 'single' = 单币
+let strategyMode = process.env.CEX_STRATEGY_MODE || 'single';   // 'single' = 单币, 'dual' = 双币(BTC+ETH)
 let primarySymbol = 'BTC/USDT:USDT'; // 单币模式下的主交易对
 let unsubscribeFns = [];      // WebSocket 取消订阅函数
 

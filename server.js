@@ -788,7 +788,6 @@ app.post('/api/cex/risk/reset', (req, res) => {
   }
 });
 
-
 app.get('/api/cex/strategy/status', (req, res) => {
   try {
     res.json(cexStrategy.getStrategyStatus());
@@ -1169,7 +1168,6 @@ app.get('/api/cex/funding', async (req, res) => {
   }
 });
 
-
 import { appendCexLog, getCexLogs } from './cex-logger.js';
 import * as cexIntel from './cex-intel.js';
 
@@ -1212,7 +1210,6 @@ app.post('/api/cex/intel', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-
 
 async function main() {
   console.log('╔══════════════════════════════════════════╗');
@@ -1300,8 +1297,11 @@ async function main() {
         : [modeInfo.primarySymbol];
       const result = await cexStrategy.startStrategy(symbols);
       if (result.success) {
-        appendCexLog('strategy_start', '[币安] 策略启动 BTC/USDT, ETH/USDT (自动)');
-        console.log('[Server] ✅ CEX 合约策略已自动启动 (BTC/USDT, ETH/USDT)');
+      const symbolsStr = symbols.map(s => s.replace(':USDT','')).join(', ');
+      appendCexLog('strategy_start', '[' + cexEngine.getExchangeLabel() + '] 策略启动 ' + symbolsStr + ' (自动)');
+      console.log('[Server] ✅ CEX 合约策略已自动启动 (' + symbolsStr + ')');
+        
+        
       }
     } catch (err) {
       console.log(`[Server] ⚠️ CEX 策略自动启动失败: ${err.message}`);
