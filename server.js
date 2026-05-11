@@ -1129,7 +1129,7 @@ app.post('/api/cex/position/close', async (req, res) => {
     }
     const result = await cexEngine.closePosition(symbol, side, exchangeId, { percent });
     if (result.success) {
-      appendCexLog('manual_close', `[${cexEngine.getExchangeLabel(exchangeId||'binance')}] 手动平${side === 'long' ? '多' : '空'} ${symbol} 盈亏: ${result.realizedPnl || '?'}`);
+      appendCexLog('manual_close', `[${cexEngine.getExchangeLabel(exchangeId||'binance')}] 手动平${side === 'long' ? '多' : '空'} ${symbol} 盈亏: ${result.realizedPnl?.toFixed(4) || '?'}`, { realizedPnl: result.realizedPnl, pnlPercent: result.pnlPercent, closePrice: result.closePrice });
     }
     res.json(result);
   } catch (err) {

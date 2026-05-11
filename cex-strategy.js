@@ -497,7 +497,7 @@ const closeResult = await cexEngine.closePosition(symbol, posSide);
             if (closeResult.pnlPercent !== undefined) adaptive.recordReturn(symbol, closeResult.pnlPercent);
             await riskManager.onPositionClosed(symbol, posSide, closeResult.realizedPnl, closeResult.pnlPercent, getExchangeId(symbol));
           } else {
-            appendCexLog('auto_close', `[${cexEngine.getExchangeLabel(getExchangeId(symbol))}] 策略平${posSide === 'long' ? '多' : '空'} ${symbol} ${(currentPosition?.contracts || '?').toString().padEnd(6)}张 (信号反转)`, { contracts: currentPosition?.contracts });
+            appendCexLog('auto_close', `[${cexEngine.getExchangeLabel(getExchangeId(symbol))}] 策略平${posSide === 'long' ? '多' : '空'} ${symbol} ${(currentPosition?.contracts || '?').toString().padEnd(6)}张 (信号反转)`, { realizedPnl: closeResult.realizedPnl, pnlPercent: closeResult.pnlPercent, contracts: currentPosition?.contracts });
           }
           positionHistory.push({
             timestamp: Date.now(),
@@ -1027,7 +1027,9 @@ async function checkPositions() {
             state.slPrice = parseFloat(entrySl.toFixed(2));
             state.bestStop = parseFloat(entrySl.toFixed(2));
             state.trailActivated = true; // 强制激活追踪
-            appendCexLog('auto_close', `[${cexEngine.getExchangeLabel(getExchangeId(symbol))}] 分段止盈50% ${symbol} ${(contracts * 0.5).toString().padEnd(6)}张 @${currentPrice.toFixed(2)}`, {
+            appendCexLog('auto_close', `[${cexEngine.getExchangeLabel(getExchangeId(symbol))}] 分段止盈50% ${symbol} ${(contracts * 0.5).toString().padEnd(6)}张 @${closeResult.closePrice || currentPrice.toFixed(2)}`, {
+              realizedPnl: closeResult.realizedPnl,
+              pnlPercent: closeResult.pnlPercent,
               triggerType: 'partial_take_profit',
               remainingPercent: 50,
               contracts: contracts * 0.5,
