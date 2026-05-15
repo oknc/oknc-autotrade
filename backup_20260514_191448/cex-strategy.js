@@ -1,10 +1,5 @@
 /**
- * cex-strategy.js — 合约策略引擎 (v2.0)
- *
- * 改进 (2026-05-14):
- * - 震荡市禁止开仓 + 信号反转冷却15分钟
- * - 连续亏损自动暂停该币种
- * - 配合adaptive v2: 夏普1笔生效+止损放宽
+ * cex-strategy.js — 合约策略引擎 (v1)
  *
  * 双信号源: 趋势跟踪 + 均值回归
  * 三套风格: 保守/稳健/激进 (复用 STYLE_PRESETS)
@@ -315,7 +310,7 @@ function generateMeanReversionSignal(symbol) {
 /**
  * 根据风格合并两个信号
  */
-function combineSignals(trend, meanRev, style, symbol, marketRegime) {
+function combineSignals(trend, meanRev, style, symbol) {
   const styleConfig = cexEngine.STYLE_PRESETS[style];
   const minConfirm = styleConfig.minSignalConfirm;
   const intelFactors = cexIntel.getAdjustmentFactors();
@@ -323,16 +318,6 @@ function combineSignals(trend, meanRev, style, symbol, marketRegime) {
 
   if (trend.direction === 'neutral' && meanRev.direction === 'neutral') {
     return { direction: 'neutral', confidence: 0, reason: '无信号', action: 'hold' };
-  }
-
-  // [改进v2] 震荡市禁止任何开仓信号（只在极端超卖/超买时才允许开仓）
-  if (marketRegime === 'ranging') {
-    // 只有在极端超卖(RSI<25)或超买(RSI>75)时才允许在震荡市开均值回归单
-    if (meanRev.direction !== 'neutral' && meanRev.reason && (meanRev.reason.includes('RSI超卖') || meanRev.reason.includes('RSI超买'))) {
-      // 允许开仓
-    } else {
-      return { direction: 'neutral', confidence: 0, reason: `震荡市(${marketRegime})不开仓, 仅极端价格容忍`, action: 'hold' };
-    }
   }
 
   // 检查是否一致
@@ -481,7 +466,7 @@ async function evaluateStrategy() {
         meanRev: meanRevSignal,
         regime: marketRegime,
       };
-      const combined = combineSignals(trendSignal, meanRevSignal, styleName, symbol, marketRegime);
+      const combined = combineSignals(trendSignal, meanRevSignal, styleName, symbol);
 
       currentSignals[symbol] = {
         timestamp: Date.now(),
@@ -532,23 +517,6 @@ const closeResult = await cexEngine.closePosition(symbol, posSide);
               contracts: currentPosition?.contracts,
             });
             if (closeResult.pnlPercent !== undefined) adaptive.recordReturn(symbol, closeResult.pnlPercent);
-            // [v2.0修复] 记录凯利交易数据
-            try {
-              if (closeResult.pnlPercent !== undefined && currentPosition) {
-                adaptive.recordTrade({
-                  timestamp: Date.now(), symbol, side: posSide,
-                  entryPrice: currentPosition.entryPrice || closeResult.entryPrice,
-                  exitPrice: closeResult.closePrice,
-                  contracts: currentPosition?.contracts,
-                  pnl: closeResult.realizedPnl,
-                  pnlPercent: closeResult.pnlPercent,
-                  reason: `信号反转: ${combined.reason}`,
-                  style: styleName,
-                  marketRegime,
-                  confidence: combined.confidence,
-                });
-              }
-            } catch(e) {}
             await riskManager.onPositionClosed(symbol, posSide, closeResult.realizedPnl, closeResult.pnlPercent, getExchangeId(symbol));
           } else {
             appendCexLog('auto_close', `[${cexEngine.getExchangeLabel(getExchangeId(symbol))}] 策略平${posSide === 'long' ? '多' : '空'} ${symbol} ${(currentPosition?.contracts || '?').toString().padEnd(6)}张 (信号反转) 盈亏:$${closeResult.realizedPnl?.toFixed(4)||'?'}(${(closeResult.pnlPercent||0).toFixed(1)}%)`, { realizedPnl: closeResult.realizedPnl, pnlPercent: closeResult.pnlPercent, contracts: currentPosition?.contracts });
@@ -579,15 +547,12 @@ const closeResult = await cexEngine.closePosition(symbol, posSide);
         continue;
       }
 
-      // [改进v2] 连续亏损检查：连败≥3笔暂停该币种
-      const consecCheck = adaptive.checkConsecutiveLosses ? adaptive.checkConsecutiveLosses(symbol) : { shouldPause: false };
-      if (consecCheck.shouldPause) {
-        console.log(`[Strategy] ⛔ ${symbol}: ${consecCheck.reason}`);
+      // 震荡市不开仓（避免磨损）
+      if (!currentPosition && combined.action.startsWith('open_') && marketRegime === 'ranging') {
+        console.log(`[Strategy] ⏸ ${symbol}: 震荡市(${marketRegime})不开仓，避免磨损`);
         continue;
       }
 
-      // [改进v2] 不立即反手: 止损冷却期内不允许开反向仓
-      
       // 检查冷却期 + 已有同币持仓
       if (!currentPosition && combined.action.startsWith('open_')) {
         // 止损冷却期内不开仓
@@ -843,8 +808,6 @@ async function checkPositions() {
           partialTpPrice: parseFloat(partialTpPrice.toFixed(2)),
           partialTpTriggered: false,
           trailActivated: false,
-          breakevenTriggered: false, // [GTFO方案B] 是否已移到保本
-          maxPnlPercent: 0,          // [GTFO方案B] 最高利润记录
           trailActivatePercent,
           trailStepPercent,
           bestStop: isLong
@@ -854,8 +817,6 @@ async function checkPositions() {
           marketRegime,
           atrPercent: atr.atrPercent,
           initialContracts: contracts,
-          entryPrice: pos.entryPrice,
-          side: pos.side,
         };
         console.log(`[Trail] 📋 ${symbol}: ${stopType === 'atr' ? 'ATR' : '固定'}止损 $${slPrice.toFixed(2)}, 止盈 $${tpPrice.toFixed(2)} (${marketRegime}, ATR:${atr.atrPercent.toFixed(1)}%)`);
         // 🔧 修复：检查交易所上是否真的有对应的SL/TP条件单，缺失则补建
@@ -938,10 +899,6 @@ async function checkPositions() {
             if (closeResult.success) {
               console.log(`[Trail] 🛑 ${symbol}: 硬底保护触发强制平仓成功 PnL:$${closeResult.realizedPnl}`);
               if (closeResult.pnlPercent !== undefined) adaptive.recordReturn(symbol, closeResult.pnlPercent);
-              // [v2.0修复] 记录凯利数据
-              if (closeResult.pnlPercent !== undefined) {
-                try { adaptive.recordTrade({ timestamp: Date.now(), symbol, side: pos.side, entryPrice: pos.entryPrice, exitPrice: closeResult.closePrice, contracts, pnl: closeResult.realizedPnl, pnlPercent: closeResult.pnlPercent, reason: '硬底保护强平', style: style.style, marketRegime: state.marketRegime, confidence: 50 }); } catch(e) {}
-              }
               appendCexLog('strategy_close', `[${cexEngine.getExchangeLabel(getExchangeId(symbol))}] 硬底保护强平 ${symbol} ${contracts.toString().padEnd(6)}张 盈亏:$${closeResult.realizedPnl?.toFixed(4)||'?'}(${(closeResult.pnlPercent||0).toFixed(1)}%)`, { type: 'hard_floor_forced', realizedPnl: closeResult.realizedPnl, closePrice: closeResult.closePrice, pnlPercent: closeResult.pnlPercent, contracts });
             } else {
               console.log(`[Trail] ❌ ${symbol}: 硬底保护强制平仓失败: ${closeResult.error}`);
@@ -1104,115 +1061,18 @@ async function checkPositions() {
         }
       }
 
-      // ====== GTFO保护改造（方案B）：保本+追踪 ======
-      // 1) 利润≥0.5% → SL移到保本价
-      // 2) 利润≥1.5% → 启动移动追踪（每0.5%步长）
-      // 3) 利润从高位回吐至<0.3% → GTFO强制平仓
+      // ====== GTFO保护：追踪激活后利润回吐至保本线附近 → 强制平仓 ======
       if (state.trailActivated) {
         const currentPnLPercent = isLong
           ? (currentPrice - pos.entryPrice) / pos.entryPrice
           : (pos.entryPrice - currentPrice) / pos.entryPrice;
-
-        // 保存最高利润用于回吐检测
-        if (state.maxPnlPercent === undefined) state.maxPnlPercent = 0;
-        if (currentPnLPercent > state.maxPnlPercent) {
-          state.maxPnlPercent = currentPnLPercent;
-        }
-
-        // === 阶段1: SL移到保本（利润≥0.5%且尚未移动）===
-        if (!state.breakevenTriggered && currentPnLPercent >= 0.005) {
-          state.breakevenTriggered = true;
-          const breakevenSl = isLong
-            ? pos.entryPrice * 1.001  // 多：保本+0.1%的微利
-            : pos.entryPrice * 0.999; // 空：保本-0.1%的微利
-          const newBreakevenSl = parseFloat(breakevenSl.toFixed(2));
-          console.log(`[Trail] 🔒 ${symbol}: 利润${(currentPnLPercent*100).toFixed(1)}%≥0.5%, SL上移至保本 $${newBreakevenSl}`);
-          // 取消旧止损单，建新保本单
-          try {
-            const openOrders = await cexEngine.restGetOpenOrders(symbol, getExchangeId(symbol));
-            if (openOrders.success) {
-              for (const o of openOrders.orders) {
-                if (o.algoType === 'CONDITIONAL' && o.type === 'STOP' && o.side.toLowerCase() === (isLong ? 'sell' : 'buy')) {
-                  await cexEngine.restCancelAlgoOrder(symbol, o.orderId, getExchangeId(symbol)).catch(() => {});
-                }
-              }
-            }
-          } catch(e) { /* 忽略 */ }
-          const closeSide = pos.side === 'long' ? 'sell' : 'buy';
-          try {
-            await cexEngine.restCreateAlgoOrder(symbol, closeSide, 'STOP', Math.abs(pos.contracts), newBreakevenSl, {
-              price: newBreakevenSl, reduceOnly: true, workingType: 'MARK_PRICE',
-            }, getExchangeId(symbol));
-          } catch(e) {
-            console.log(`[Trail] ⚠️ ${symbol}: 保本SL创建失败: ${e.message}`);
-          }
-          state.slPrice = newBreakevenSl;
-          state.bestStop = newBreakevenSl;
-          // 移除旧的 TP 条件单，恢复让利润奔跑（分段止盈已完成使命）
-          // 不取消TP，让TP作为兜底保护
-          appendCexLog('strategy_close', `[${cexEngine.getExchangeLabel(getExchangeId(symbol))}] 保本保护 ${symbol} SL上移 $${newBreakevenSl} (利润${(currentPnLPercent*100).toFixed(1)}%)`, {
-            triggerType: 'breakeven_protection',
-            breakevenSl: newBreakevenSl,
-            pnlPercent: currentPnLPercent,
-          });
-        }
-
-        // === 阶段2: 移动追踪（利润≥1.5%后每0.5%追踪一次）===
-        const TRAIL_TRIGGER = 0.015; // 1.5%启动
-        const TRAIL_STEP = 0.005; // 0.5%步长
-        if (state.breakevenTriggered && currentPnLPercent >= TRAIL_TRIGGER) {
-          // 计算当前最佳追踪止损位
-          const trailLock = currentPnLPercent - TRAIL_STEP; // 锁定利润 = 当前 - 步长
-          const trailSlPrice = isLong
-            ? pos.entryPrice * (1 + trailLock)
-            : pos.entryPrice * (1 - trailLock);
-          const newTrailSl = parseFloat(trailSlPrice.toFixed(2));
-          // 只有新止损更好才更新
-          const shouldUpdate = isLong
-            ? newTrailSl > state.bestStop
-            : newTrailSl < state.bestStop;
-          if (shouldUpdate) {
-            state.bestStop = newTrailSl;
-            state.slPrice = newTrailSl;
-            console.log(`[Trail] 🎯 ${symbol}: 追踪止盈上移 SL→$${newTrailSl} (锁利${(trailLock*100).toFixed(1)}%)`);
-            // 更新链上止损单
-            try {
-              const openOrders = await cexEngine.restGetOpenOrders(symbol, getExchangeId(symbol));
-              if (openOrders.success) {
-                for (const o of openOrders.orders) {
-                  if (o.algoType === 'CONDITIONAL' && o.type === 'STOP' && o.side.toLowerCase() === (isLong ? 'sell' : 'buy')) {
-                    await cexEngine.restCancelAlgoOrder(symbol, o.orderId, getExchangeId(symbol)).catch(() => {});
-                  }
-                }
-              }
-            } catch(e) { /* 忽略 */ }
-            const closeSide = pos.side === 'long' ? 'sell' : 'buy';
-            try {
-              await cexEngine.restCreateAlgoOrder(symbol, closeSide, 'STOP', Math.abs(pos.contracts), newTrailSl, {
-                price: newTrailSl, reduceOnly: true, workingType: 'MARK_PRICE',
-              }, getExchangeId(symbol));
-            } catch(e) {
-              console.log(`[Trail] ⚠️ ${symbol}: 追踪SL创建失败: ${e.message}`);
-            }
-            appendCexLog('strategy_close', `[${cexEngine.getExchangeLabel(getExchangeId(symbol))}] 追踪止盈 ${symbol} SL上移 $${newTrailSl} (利润${(currentPnLPercent*100).toFixed(1)}%)`, {
-              triggerType: 'trailing_stop',
-              slPrice: newTrailSl,
-              pnlPercent: currentPnLPercent,
-            });
-          }
-        }
-
-        // === 阶段3: 回吐保护（从高位回吐至<0.3%时强平）===
-        const GTFO_RETRACE = 0.003; // 0.3%
-        if (currentPnLPercent < GTFO_RETRACE && state.maxPnlPercent >= 0.008) {
-          console.log(`[Trail] 🛑 ${symbol}: GTFO保护触发（利润从${(state.maxPnlPercent*100).toFixed(1)}%回吐至${(currentPnLPercent*100).toFixed(1)}%）`);
+        const GTFO_THRESHOLD = 0.002; // 0.2%
+        if (currentPnLPercent < GTFO_THRESHOLD) {
+          console.log('[Trail] 🛑 ' + symbol + ': GTFO保护触发（利润已回吐至' + (currentPnLPercent*100).toFixed(1) + '%）');
           try {
             const closeResult = await cexEngine.closePosition(symbol, pos.side, getExchangeId(symbol));
             if (closeResult.success) {
               if (closeResult.pnlPercent !== undefined) adaptive.recordReturn(symbol, closeResult.pnlPercent);
-              if (closeResult.pnlPercent !== undefined) {
-                try { adaptive.recordTrade({ timestamp: Date.now(), symbol, side: pos.side, entryPrice: pos.entryPrice, exitPrice: closeResult.closePrice, contracts, pnl: closeResult.realizedPnl, pnlPercent: closeResult.pnlPercent, reason: 'GTFO保护', style: style.style, marketRegime: state.marketRegime, confidence: 50 }); } catch(e) {}
-              }
               await riskManager.onPositionClosed(symbol, pos.side, closeResult.realizedPnl, closeResult.pnlPercent, getExchangeId(symbol));
               appendCexLog('strategy_close', '[' + cexEngine.getExchangeLabel(getExchangeId(symbol)) + '] GTFO保护平' + (pos.side === 'long' ? '多' : '空') + ' ' + symbol + ' ' + contracts.toString().padEnd(6) + '张 @' + closeResult.closePrice + ' 盈亏:$' + (closeResult.realizedPnl?.toFixed(4)||'?') + '(' + (closeResult.pnlPercent||0).toFixed(1) + '%)', {
                 realizedPnl: closeResult.realizedPnl,
@@ -1239,10 +1099,6 @@ async function checkPositions() {
           const closeResult = await cexEngine.closePosition(symbol, pos.side, getExchangeId(symbol));
           if (closeResult.success && closeResult.realizedPnl !== undefined) {
             if (closeResult.pnlPercent !== undefined) adaptive.recordReturn(symbol, closeResult.pnlPercent);
-            // [v2.0修复] 记录凯利数据
-            if (closeResult.pnlPercent !== undefined) {
-              try { adaptive.recordTrade({ timestamp: Date.now(), symbol, side: pos.side, entryPrice: pos.entryPrice, exitPrice: closeResult.closePrice, contracts, pnl: closeResult.realizedPnl, pnlPercent: closeResult.pnlPercent, reason: '止损', style: style.style, marketRegime, confidence: 50 }); } catch(e) {}
-            }
             await riskManager.onPositionClosed(symbol, pos.side, closeResult.realizedPnl, closeResult.pnlPercent, getExchangeId(symbol));
             appendCexLog('auto_close', `[${cexEngine.getExchangeLabel(getExchangeId(symbol))}] 止损平${pos.side === 'long' ? '多' : '空'} ${symbol} ${contracts.toString().padEnd(6)}张 @${closeResult.closePrice} 盈亏:$${closeResult.realizedPnl?.toFixed(4)||'?'}(${(closeResult.pnlPercent||0).toFixed(1)}%)`, {
               realizedPnl: closeResult.realizedPnl,
@@ -1258,10 +1114,6 @@ async function checkPositions() {
           const closeResult = await cexEngine.closePosition(symbol, pos.side, getExchangeId(symbol));
           if (closeResult.success && closeResult.realizedPnl !== undefined) {
             if (closeResult.pnlPercent !== undefined) adaptive.recordReturn(symbol, closeResult.pnlPercent);
-            // [v2.0修复] 记录凯利数据
-            if (closeResult.pnlPercent !== undefined) {
-              try { adaptive.recordTrade({ timestamp: Date.now(), symbol, side: pos.side, entryPrice: pos.entryPrice, exitPrice: closeResult.closePrice, contracts, pnl: closeResult.realizedPnl, pnlPercent: closeResult.pnlPercent, reason: '止盈', style: style.style, marketRegime, confidence: 50 }); } catch(e) {}
-            }
             await riskManager.onPositionClosed(symbol, pos.side, closeResult.realizedPnl, closeResult.pnlPercent, getExchangeId(symbol));
             appendCexLog('auto_close', `[${cexEngine.getExchangeLabel(getExchangeId(symbol))}] 止盈平${pos.side === 'long' ? '多' : '空'} ${symbol} ${contracts.toString().padEnd(6)}张 @${closeResult.closePrice} 盈亏:$${closeResult.realizedPnl?.toFixed(4)||'?'}(${(closeResult.pnlPercent||0).toFixed(1)}%)`, {
               realizedPnl: closeResult.realizedPnl,
@@ -1309,11 +1161,6 @@ async function checkPositions() {
           console.log(`[Trail] ⏳ ${symbol}: 止损冷却 ${STOP_LOSS_COOLDOWN_MS/60000}分钟`);
           const closeResult = await cexEngine.closePosition(symbol, pos.side, getExchangeId(symbol));
           if (closeResult.success && closeResult.realizedPnl !== undefined) {
-            if (closeResult.pnlPercent !== undefined) adaptive.recordReturn(symbol, closeResult.pnlPercent);
-            // [v2.0修复] 记录凯利数据
-            if (closeResult.pnlPercent !== undefined) {
-              try { adaptive.recordTrade({ timestamp: Date.now(), symbol, side: pos.side, entryPrice: pos.entryPrice, exitPrice: closeResult.closePrice, contracts, pnl: closeResult.realizedPnl, pnlPercent: closeResult.pnlPercent, reason: '止损(空)', style: style.style, marketRegime, confidence: 50 }); } catch(e) {}
-            }
             await riskManager.onPositionClosed(symbol, pos.side, closeResult.realizedPnl, closeResult.pnlPercent, getExchangeId(symbol));
             appendCexLog('auto_close', `[${cexEngine.getExchangeLabel(getExchangeId(symbol))}] 止损平${pos.side === 'long' ? '多' : '空'} ${symbol} ${contracts.toString().padEnd(6)}张 @${closeResult.closePrice} 盈亏:$${closeResult.realizedPnl?.toFixed(4)||'?'}(${(closeResult.pnlPercent||0).toFixed(1)}%)`, {
               realizedPnl: closeResult.realizedPnl,
@@ -1328,11 +1175,6 @@ async function checkPositions() {
           console.log(`[Trail] ✅ ${symbol}: 触发止盈! 现价 $${currentPrice.toFixed(2)} ≤ 止盈 $${state.tpPrice.toFixed(2)}`);
           const closeResult = await cexEngine.closePosition(symbol, pos.side, getExchangeId(symbol));
           if (closeResult.success && closeResult.realizedPnl !== undefined) {
-            if (closeResult.pnlPercent !== undefined) adaptive.recordReturn(symbol, closeResult.pnlPercent);
-            // [v2.0修复] 记录凯利数据
-            if (closeResult.pnlPercent !== undefined) {
-              try { adaptive.recordTrade({ timestamp: Date.now(), symbol, side: pos.side, entryPrice: pos.entryPrice, exitPrice: closeResult.closePrice, contracts, pnl: closeResult.realizedPnl, pnlPercent: closeResult.pnlPercent, reason: '止盈(空)', style: style.style, marketRegime, confidence: 50 }); } catch(e) {}
-            }
             await riskManager.onPositionClosed(symbol, pos.side, closeResult.realizedPnl, closeResult.pnlPercent, getExchangeId(symbol));
             appendCexLog('auto_close', `[${cexEngine.getExchangeLabel(getExchangeId(symbol))}] 止盈平${pos.side === 'long' ? '多' : '空'} ${symbol} ${contracts.toString().padEnd(6)}张 @${closeResult.closePrice} 盈亏:$${closeResult.realizedPnl?.toFixed(4)||'?'}(${(closeResult.pnlPercent||0).toFixed(1)}%)`, {
               realizedPnl: closeResult.realizedPnl,
@@ -1383,30 +1225,13 @@ async function checkPositions() {
           try {
             const ts = trailingState[sym];
             if (ts) {
-              let triggerDesc = '条件单平仓(ALGO)';
-              // 如果有side信息，可以通过对比入场价和止损/止盈价判断方向
-              if (ts.side && ts.entryPrice && ts.slPrice && ts.tpPrice) {
-                const isLong = ts.side === 'long';
-                // 检查slPrice和tpPrice相对entryPrice的位置来判断是哪种条件单
-                // 如果是追踪激活过的，大概率是追踪止盈触发了止损上移
-                if (ts.trailActivated) {
-                  triggerDesc = '追踪止盈触发强平(ALGO)';
-                } else if (ts.partialTpTriggered) {
-                  triggerDesc = '分段止盈剩余仓位平仓(ALGO)';
-                } else {
-                  // 初始条件单触发：比较触发价和入场价
-                  // 多单：止损<入场<止盈，空单：止盈<入场<止损
-                  // 但我们不知道实际触发价，只能标记为未知
-                  triggerDesc = '初始止盈/止损触发(ALGO)';
-                }
-                // PnL无法获取，但至少标签清楚了
-                appendCexLog('auto_close', `[${cexEngine.getExchangeLabel(getExchangeId(sym))}] ${triggerDesc} ${sym} @${ts.entryPrice} (盈亏:? 请查交易所记录)`, {
-                  triggerType: 'algo_filled',
-                  entryPrice: ts.entryPrice,
-                  trailActivated: ts.trailActivated,
-                  side: ts.side,
-                });
-              }
+              // 从trailingState中推断盈亏：追踪止损触发价 ≈ slPrice，开仓价 ≈ entryPrice
+              const entryPx = ts.entryPrice;
+              // 无法拿到实际成交价，标记为algo触发
+              appendCexLog('auto_close', `[${cexEngine.getExchangeLabel(getExchangeId(sym))}] 条件单止盈/止损平仓 ${sym} (ALGO成交)`, {
+                triggerType: 'algo_filled',
+                entryPrice: entryPx,
+              });
             }
           } catch(e) {}
         }
@@ -1599,4 +1424,4 @@ export function getSignalsSummary() {
 }
 
 /** * 获取追踪止盈状态（供前端展示） */export function getTrailingState() {  const result = {};  for (const [sym, state] of Object.entries(trailingState)) {    result[sym] = {      slPrice: state.slPrice,      tpPrice: state.tpPrice,      trailActivated: state.trailActivated,      trailActivatePercent: state.trailActivatePercent,      trailStepPercent: state.trailStepPercent,      bestStop: state.bestStop,      marketRegime: state.marketRegime,      atrPercent: state.atrPercent,      lastUpdated: state.lastUpdated,    };  }  return result;}
-console.log('[Strategy] 🧠 策略引擎已加载 (v2.0 — 震荡市不开仓+连败暂停+反转冷却)');
+console.log('[Strategy] 🧠 策略引擎已加载');

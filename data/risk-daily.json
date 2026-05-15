@@ -1,22 +1,22 @@
 {
-  "date": "2026-05-11",
-  "startBalance": 87.27245775,
-  "currentBalance": 84.35860159,
-  "realizedPnl": -2.1694,
-  "dailyPnl": -2.1694,
-  "dailyPnlPercent": -2.4857785101164978,
-  "tradeCount": 7,
-  "maxDrawdown": 3.3388038278319194,
-  "peakBalance": 87.27245775,
+  "date": "2026-05-15",
+  "startBalance": 99.09027696,
+  "currentBalance": 99.22670086,
+  "realizedPnl": -0.3660000000000001,
+  "dailyPnl": -0.3660000000000001,
+  "dailyPnlPercent": -0.36936015442538744,
+  "tradeCount": 3,
+  "maxDrawdown": 0.7102522352540939,
+  "peakBalance": 99.9365021,
   "isFrozen": false,
   "frozenReason": "",
-  "positionsClosed": 5,
+  "positionsClosed": 3,
   "wins": 2,
-  "losses": 3,
+  "losses": 1,
   "exchangeStats": {
     "binance": {
       "wins": 2,
-      "losses": 3
+      "losses": 1
     }
   }
 }

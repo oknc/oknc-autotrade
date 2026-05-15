@@ -8,7 +8,7 @@
 <script src="https://unpkg.com/lightweight-charts@4.1.1/dist/lightweight-charts.standalone.production.js"></script>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
-:root{--bg:#0a0e1a;--card:#131a2b;--card2:#1a2340;--border:#2a3560;--text:#d0d8f0;--text2:#7a8ab5;--green:#00c087;--red:#f05555;--gold:#f0b050;--blue:#3b82f6;--radius:10px}
+:root{--bg:#0a0e1a;--card:#131a2b;--card2:#1a2340;--border:#2a3560;--text:#d0d8f0;--text2:#7a8ab5;--green:#00c087;--red:#f05555;--orange:#ff884d;--gold:#f0b050;--blue:#3b82f6;--radius:10px}
 body{background:var(--bg);color:var(--text);font-family:-apple-system,'Segoe UI',system-ui,sans-serif;min-height:100vh;overflow-x:hidden}
 .auth-screen{position:fixed;inset:0;background:var(--bg);display:flex;align-items:center;justify-content:center;z-index:9999}
 .auth-box{background:var(--card);padding:40px;border-radius:var(--radius);width:340px;border:1px solid var(--border)}
@@ -127,7 +127,7 @@ body{background:var(--bg);color:var(--text);font-family:-apple-system,'Segoe UI'
 <body>
 <div class="auth-screen" id="authScreen">
   <div class="auth-box">
-    <h2>🔷AI合约自动交易系统</h2>
+    <h2>🔷AI合约自动交易系统 <span style="font-size:12px;color:var(--text2);font-weight:400">v2.0.0</span></h2>
     <input type="password" id="loginPass" placeholder="请输入密码" autocomplete="off">
     <button class="btn-login" onclick="doLogin()">登 录</button>
     <div class="error" id="loginError">密码错误</div>
@@ -136,7 +136,7 @@ body{background:var(--bg);color:var(--text);font-family:-apple-system,'Segoe UI'
 
 <div class="container hidden" id="app">
   <div class="top-bar">
-    <div class="logo">🔷AI合约自动交易系统</div>
+    <div class="logo">🔷AI合约自动交易系统 <span style="font-size:11px;color:var(--text2);font-weight:400">v2.0.0</span> <span id="roleBadge" style="font-size:11px;padding:1px 6px;border-radius:4px;margin-left:4px"></span> <span style="font-size:13px;color:var(--text2);margin-left:6px" id="topClock">🕐 --:--:--</span></div>
     <div class="balance-box">
       余额: <span class="num" id="balanceVal">--</span>
       <span class="pnl" id="dailyPnl">(日盈亏: --)</span>
@@ -243,8 +243,10 @@ body{background:var(--bg);color:var(--text);font-family:-apple-system,'Segoe UI'
   <div class="risk-bar">
     <div class="risk-item" id="riskFloatingPnlRow" style="display:none">💹 持仓浮盈: <span class="val" id="riskFloatingPnl">--</span></div>
     <div class="risk-item">📈 日盈亏: <span class="val" id="riskDailyPnl">--</span></div>
-    <div class="risk-item">📊 胜率: <span class="val" id="riskWinRate">--</span></div>
+    <div class="risk-item">📊 日胜率: <span class="val" id="riskWinRate">--</span></div>
+    <div class="risk-item">📈 总胜率: <span class="val" id="riskTotalWinRate">--</span></div>
     <div class="risk-item">📉 最大回撤: <span class="val" id="riskDrawdown">--</span></div>
+    <div class="risk-item">🛡️ 安全垫: <span class="val" id="riskCushion">--</span></div>
     <div class="risk-item">🛡️ 熔断: <span class="val" id="riskFrozen">否</span></div>
     <button class="btn-reset" onclick="resetCircuitBreaker()">重置熔断</button>
   </div>
@@ -331,6 +333,15 @@ function showToast(msg, type='info') {
 }
 
 async function init() {
+  // 显示角色标签
+  const badge = document.getElementById('roleBadge');
+  if (state.role === 'readonly') {
+    badge.textContent = '👁 观摩';
+    badge.style.cssText = 'background:rgba(240,176,80,.15);color:var(--gold);font-size:11px;padding:1px 6px;border-radius:4px';
+  } else {
+    badge.textContent = '🔧 管理员';
+    badge.style.cssText = 'background:rgba(0,192,135,.15);color:var(--green);font-size:11px;padding:1px 6px;border-radius:4px';
+  }
   if (state.role === 'readonly') {
     document.getElementById('trailSlider').disabled = true;
   }
@@ -341,6 +352,18 @@ async function init() {
   setTimeout(() => { loadOHLCV(); }, 300);
   loadPositions(); loadRiskStatus(); loadStrategyStatus();
   loadTrailInterval(); startSSE(); startPolling(); loadTrailState();
+  startOHLCVRefresh();
+  startClock();
+}
+// 实时时钟
+function startClock() {
+  function updateClock() {
+    const now = new Date();
+    const s = now.toLocaleTimeString('zh-CN', {hour12: false, timeZone: 'Asia/Shanghai'});
+    document.getElementById('topClock').textContent = '🕐 ' + s;
+  }
+  updateClock();
+  setInterval(updateClock, 1000);
 }
 async function loadTrailInterval() {
   const d = await api('/contract/api/cex/trail-interval');
@@ -397,9 +420,10 @@ async function toggleStrategy() {
     if (!d || d.error) return showToast(d?.error || '停止失败', 'error');
     state.strategyRunning = false;
   } else {
-    // 使用当前选中的交易所启动策略
+    // 使用当前选中的交易对启动策略
     const exId = state.activeExchange;
-    const startSymbols = ['ETH/USDT:USDT', 'BTC/USDT:USDT'];
+    const startSymbol = state.chartSymbol.includes(':') ? state.chartSymbol : state.chartSymbol + ':USDT';
+    const startSymbols = [startSymbol];
     const exMap = {};
     for (const sym of startSymbols) exMap[sym] = exId;
     const d = await api('/contract/api/cex/strategy/start', {method:'POST', body: JSON.stringify({symbols: startSymbols, exchangeMap: exMap})});
@@ -447,8 +471,21 @@ function initChart() {
     grid: {vertLines:{color:'rgba(42,53,96,0.4)'}, horzLines:{color:'rgba(42,53,96,0.4)'}},
     crosshair: {mode: LightweightCharts.CrosshairMode.Normal},
     rightPriceScale: {borderColor:'rgba(42,53,96,0.6)', scaleMargins:{top:0.1,bottom:0.3}},
-    timeScale: {borderColor:'rgba(42,53,96,0.6)', timeVisible:true, secondsVisible:false},
+    timeScale: {borderColor:'rgba(42,53,96,0.6)', timeVisible:true, secondsVisible:false,
+      tickMarkFormatter:(time)=>{
+        const d=new Date(time*1000+8*3600000);
+        return String(d.getUTCHours()).padStart(2,'0')+':'+String(d.getUTCMinutes()).padStart(2,'0');
+      }
+    },
     handleScroll: {vertTouchDrag:false},
+    localization: {
+      timeFormatter:(time)=>{
+        const d=new Date(time*1000+8*3600000);
+        const y=d.getUTCFullYear(),mo=String(d.getUTCMonth()+1).padStart(2,'0'),dd=String(d.getUTCDate()).padStart(2,'0');
+        const h=String(d.getUTCHours()).padStart(2,'0'),m=String(d.getUTCMinutes()).padStart(2,'0'),s=String(d.getUTCSeconds()).padStart(2,'0');
+        return y+'-'+mo+'-'+dd+' '+h+':'+m+':'+s;
+      }
+    },
   });
   state.candleSeries = state.chart.addCandlestickSeries({
     upColor:'#00c087', downColor:'#f05555', borderUpColor:'#00c087', borderDownColor:'#f05555',
@@ -476,9 +513,21 @@ async function loadOHLCV() {
   );
   state.candleSeries.setData(candles);
   state.volumeSeries.setData(volumes);
+  // 记录蜡烛时间点，用于marker对齐
+  candleTimes = candles.map(c => c.time);
   state.chart.timeScale().fitContent();
   updateChartSource();
   if (candles.length > 0) updatePrice(candles[candles.length-1].close, candles[candles.length-1].open);
+  loadTradeMarkers();
+}
+// K线定时刷新 - 每30秒更新一次，确保显示最新蜡烛
+let ohlcvRefreshTimer = null;
+function startOHLCVRefresh() {
+  if (ohlcvRefreshTimer) clearInterval(ohlcvRefreshTimer);
+  ohlcvRefreshTimer = setInterval(() => {
+    if (!state.token || !state.chartSymbol) return;
+    loadOHLCV();
+  }, 30000);
 }
 function updatePrice(close, open) {
   const el = document.getElementById('currentPrice');
@@ -493,7 +542,7 @@ async function switchTF(tf) {
 async function switchChartSymbol(sym) {
   state.chartSymbol = sym;
   document.querySelectorAll('[data-chart-sym]').forEach(b=>b.classList.toggle('active', b.dataset.chartSym === sym));
-  document.getElementById('chartSymbol').textContent = sym; loadOHLCV(); loadTrailState();
+  document.getElementById('chartSymbol').textContent = sym; loadOHLCV(); loadTrailState(); startOHLCVRefresh();
 }
 
 function selectTradeSymbol(sym) {
@@ -554,9 +603,32 @@ async function loadPositions() {
         '<span class="label">标记价</span><span class="value">$'+(typeof mark==='number'?mark.toFixed(2):mark)+'</span>'+
         '<span class="label">浮盈</span><span class="value '+(pnl>=0?'pnl-pos':'pnl-neg')+'">'+(pnl>=0?'+':'')+'$'+pnl.toFixed(2)+' ('+(pnlPct>=0?'+':'')+pnlPct.toFixed(2)+'%)</span>'+
         '<span class="label">强平</span><span class="value" style="color:'+(liq!=='--'?'var(--red)':'var(--text2)')+'">$'+(typeof liq==='number'?liq.toFixed(2):liq)+'</span>'+
+        // 安全垫：标记价到强平价的百分比
+        (function(){if(liq!=='--'&&typeof mark==='number'&&typeof liq==='number'){var dist=Math.abs(mark-liq);var pct=(dist/mark*100);var c=pct>=50?'var(--green)':pct>=30?'var(--gold)':pct>=15?'var(--orange)':'var(--red)';return '<span class="label">🛡️ 安全垫</span><span class="value" style="color:'+c+'">'+pct.toFixed(1)+'%</span>';}return '';})()+
       '</div>'+
       '<button class="btn-close" onclick="manualClose(\''+pos.symbol+'\',\''+side+'\')">平仓</button></div>';
   }).join('');
+  // 更新风控栏安全垫（取所有持仓的最小值）
+  var minCushion = Infinity;
+  for (var _i = 0; _i < d.positions.length; _i++) {
+    var _p = d.positions[_i];
+    var _liq = _p.liquidationPrice;
+    var _mk = _p.markPrice || _p.lastPrice;
+    if (_liq && _mk && typeof _liq==='number' && typeof _mk==='number') {
+      var _d = Math.abs(_mk - _liq);
+      var _pct = _d / _mk * 100;
+      if (_pct < minCushion) minCushion = _pct;
+    }
+  }
+  var el = document.getElementById('riskCushion');
+  if (minCushion < Infinity) {
+    var _c = minCushion>=50 ? 'var(--green)' : minCushion>=30 ? 'var(--gold)' : minCushion>=15 ? 'var(--orange)' : 'var(--red)';
+    el.textContent = minCushion.toFixed(1)+'%';
+    el.style.color = _c;
+  } else {
+    el.textContent = '--';
+    el.style.color = '';
+  }
 }
 
 async function loadRiskStatus() {
@@ -599,6 +671,7 @@ async function loadRiskStatus() {
     document.getElementById('dailyPnl').className = 'pnl '+(d.dailyPnl>=0?'pnl-pos':'pnl-neg');
   }
   if (d.winRate) document.getElementById('riskWinRate').textContent = d.winRate + (d.wins!==undefined && d.losses!==undefined ? ' ('+(d.wins+d.losses)+'笔)' : '');
+  if (d.totalWinRate) document.getElementById('riskTotalWinRate').textContent = d.totalWinRate + ' ('+(d.totalWins+d.totalLosses)+'笔)';
   if (d.maxDrawdown!==undefined) document.getElementById('riskDrawdown').textContent = d.maxDrawdown.toFixed(1)+'%';
 }
 async function resetCircuitBreaker() {
@@ -679,6 +752,32 @@ function updateTrailLines(sym, sl, tp) {
       axisLabelVisible: true, title: 'TP',
     });
   }
+}
+
+// K线成交标记 - 加载开平仓标记
+let candleTimes = [];
+async function loadTradeMarkers() {
+  try {
+    const sym = state.chartSymbol || 'BTC/USDT:USDT';
+    const r = await fetch('/contract/api/cex/trade-markers?symbol=' + encodeURIComponent(sym) + '&hours=72');
+    const d = await r.json();
+    if (!d.success || !d.markers || d.markers.length === 0) return;
+    if (!candleTimes || candleTimes.length === 0) { console.log('[Markers] ⚠ candleTimes为空，跳过'); return; }
+    // 将marker时间精确匹配到最近的蜡烛时间点
+    const step = candleTimes.length > 1 ? candleTimes[1] - candleTimes[0] : 60; // K线步长(秒)
+    const maxDiff = Math.floor(step / 2); // 允许最大误差为半个K线步长
+    const aligned = d.markers.filter(m => m && m.time > 0).map(m => {
+      let best = candleTimes[0], bestDiff = Infinity;
+      for (const ct of candleTimes) {
+        const diff = Math.abs(ct - m.time);
+        if (diff < bestDiff) { bestDiff = diff; best = ct; }
+      }
+      return { ...m, time: best, _diff: bestDiff };
+    }).filter(m => m._diff <= maxDiff);
+    console.log('[Markers] 原='+d.markers.length+' 对齐后='+aligned.length+' 步长='+step+'s 容差='+maxDiff+'s 蜡烛='+candleTimes.length);
+    if (aligned.length === 0) return;
+    state.candleSeries.setMarkers(aligned.slice(-50));
+  } catch(e) { console.error('[Markers]', e); }
 }
 
 let sseReconnectTimer = null;
@@ -763,6 +862,7 @@ async function logout() {
   document.getElementById('loginError').style.display = 'none';
 }
 async function toggleMode() {
+  if (state.role === 'readonly') return showToast('👁 观摩账号无权操作', 'error');
   const el = document.getElementById('modeToggle');
   const label = document.getElementById('modeLabel');
   const isDual = state.strategyMode === 'dual';

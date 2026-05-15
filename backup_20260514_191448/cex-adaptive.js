@@ -1,45 +1,16 @@
 /**
- * cex-adaptive.js — 自适应进化引擎 (v2.0)
+ * cex-adaptive.js — 自适应进化引擎 (v1)
  *
- * 改进 (2026-05-14):
- * 1. 夏普加强: 1笔亏损即标记警戒, 2笔连续亏损即可暂停
- * 2. ADX阈值调高(35→trending, 20→ranging), 减少false trending
- * 3. ATR止损放宽: 至少X2 ATR, 动态1:2最小盈亏比
- * 4. 震荡市不开仓+信号反转严格化
- * 5. 持久化学习: tradeHistory/symbolReturns写入文件
+ * 功能：
+ * 1. MarketRegimeDetector — ADX + 波动率识别市场状态
+ * 2. AdaptiveSizer — 基于绩效的仓位管理
+ * 3. AdaptiveStops — ATR 动态止盈止损
+ * 4. StrategyWeighter — 趋势/均值回归权重分配
+ * 5. TradeJournal — 交易记录与绩效分析
  */
-import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DATA_DIR = path.join(__dirname, 'data');
-const TRADE_HISTORY_FILE = path.join(DATA_DIR, 'trade-history.json');
-const RETURNS_FILE = path.join(DATA_DIR, 'symbol-returns.json');
-
-// ============ 持久化工具 ============
-function ensureDir() {
-  if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-}
-
-function loadFromFile(file, def) {
-  try {
-    if (fs.existsSync(file)) {
-      return JSON.parse(fs.readFileSync(file, 'utf8'));
-    }
-  } catch (e) { /* ignore */ }
-  return def;
-}
-
-function saveToFile(file, data) {
-  try {
-    ensureDir();
-    fs.writeFileSync(file, JSON.stringify(data));
-  } catch (e) { /* ignore */ }
-}
 
 // ============ 市场状态检测 ============
-// 改进: ADX 阈值调高, 减少假趋势判断
+
 export function calcADX(highs, lows, closes, period = 14) {
   if (highs.length < period + 1) return { adx: 25, plusDI: 20, minusDI: 20 };
   const tr = [];
@@ -93,13 +64,12 @@ export function calcATR(highs, lows, closes, period = 14) {
   return { atr, atrPercent: avgPrice > 0 ? (atr / avgPrice) * 100 : 1 };
 }
 
-// [改进2] ADX阈值调高: trending≥35, ranging<20, 中间为transitioning
 export function detectMarketRegime(highs, lows, closes) {
   const { adx, plusDI, minusDI } = calcADX(highs, lows, closes);
   const { atrPercent } = calcATR(highs, lows, closes);
   if (atrPercent > 3) return 'volatile';
-  if (adx > 35) return 'trending';
-  if (adx < 20) return 'ranging';
+  if (adx > 30) return 'trending';
+  if (adx < 15) return 'ranging';
   return 'transitioning';
 }
 
@@ -113,12 +83,9 @@ export function getSignalWeights(highs, lows, closes) {
   }
 }
 
-// ============ 自适应仓位管理 (持久化) ============
-let tradeHistory = loadFromFile(TRADE_HISTORY_FILE, []);
+// ============ 自适应仓位管理 ============
 
-export function persistTradeHistory() {
-  saveToFile(TRADE_HISTORY_FILE, tradeHistory);
-}
+let tradeHistory = [];
 
 export function recordTrade(trade) {
   tradeHistory.push({
@@ -137,7 +104,6 @@ export function recordTrade(trade) {
     duration: trade.duration || 0,
   });
   if (tradeHistory.length > 200) tradeHistory = tradeHistory.slice(-200);
-  persistTradeHistory(); // 即时持久化
 }
 
 export function getTradeStats(window = 20) {
@@ -161,12 +127,12 @@ export function getTradeStats(window = 20) {
 }
 
 export function kellyPositionSize(stats) {
-  if (stats.tradeCount < 3) return { fraction: 0.08, reason: '数据不足，超保守仓位(8%)' }; // [改进] 从15%降到8%
+  if (stats.tradeCount < 3) return { fraction: 0.15, reason: '数据不足，保守仓位' };
   const avgLossAbs = Math.abs(stats.avgLoss);
-  if (avgLossAbs === 0) return { fraction: 0.15, reason: '零亏损，用15%' };
+  if (avgLossAbs === 0) return { fraction: 0.3, reason: '零亏损，用30%' };
   const b = stats.avgWin / avgLossAbs;
   const kelly = (b * stats.winRate - (1 - stats.winRate)) / b;
-  const fraction = Math.max(0.01, Math.min(0.3, kelly)) * 0.5; // [改进] 从0.4/0.5降到0.3/0.5
+  const fraction = Math.max(0.02, Math.min(0.4, kelly)) * 0.5;
   return { fraction, reason: `凯利${kelly.toFixed(2)}→半凯利${fraction.toFixed(3)}` };
 }
 
@@ -185,10 +151,11 @@ export function calculateAdaptivePosition(totalBalance, price, leverage, contrac
   const { fraction: kellyFrac } = kellyPositionSize(stats);
   const { fraction, reason } = streakAdjustment(kellyFrac, stats.streak);
   let regimeAdj = 1;
-  if (marketRegime === 'volatile') regimeAdj = 0.5;   // [改进] volatile从0.6降0.5
-  else if (marketRegime === 'trending') regimeAdj = 1.0; // [改进] trending从1.2降1.0（不放大）
-  else if (marketRegime === 'ranging') regimeAdj = 0.5;  // [改进] ranging从0.8降0.5
-  const maxFraction = Math.min(positionPercent / 100, 0.3); // [改进] 硬上限从0.4降0.3
+  if (marketRegime === 'volatile') regimeAdj = 0.6;
+  else if (marketRegime === 'trending') regimeAdj = 1.2;
+  else if (marketRegime === 'ranging') regimeAdj = 0.8;
+  // positionPercent 作为硬上限（风格参数生效）
+  const maxFraction = Math.min(positionPercent / 100, 0.4);
   const finalFraction = Math.min(fraction * regimeAdj, maxFraction);
   const positionValue = totalBalance * leverage * finalFraction;
   const contractQty = Math.max(contracts, parseFloat((positionValue / price).toFixed(6)));
@@ -196,86 +163,48 @@ export function calculateAdaptivePosition(totalBalance, price, leverage, contrac
 }
 
 // ============ ATR 动态止盈止损 ============
-// [改进3] 止损放宽: 至少ATR×2, 盈亏比至少1:2
+
 export function calculateAdaptiveStops(entryPrice, currentPrice, side, atr, atrPercent, styleConfig) {
   const isLong = side === 'long';
-  // ATR倍数: 低波动时给足够空间, 高波动时适当放大
+  const baseMultiplier = styleConfig.stopLossPercent / 3 || 1;
   let atrMultiplier;
-  if (atrPercent > 3) atrMultiplier = 2.5;   // 高波动
-  else if (atrPercent > 1.5) atrMultiplier = 2.0;  // 中等
-  else atrMultiplier = 3.0;  // 低波动: 给3倍ATR空间
-
+  if (atrPercent > 3) atrMultiplier = baseMultiplier * 1.5;
+  else if (atrPercent > 1.5) atrMultiplier = baseMultiplier;
+  else atrMultiplier = Math.max(baseMultiplier * 0.8, 2.5);  // 低波动时不低于2.5x
   const atrStop = atr * atrMultiplier;
-
-  // 但止损不能超过风格预设的maxLoss的1.5倍
-  const maxSlDist = entryPrice * (styleConfig.stopLossPercent / 100) * 1.5;
-  const slDistance = Math.min(atrStop, maxSlDist);
-
   const slPrice = isLong
-    ? Math.max(currentPrice - slDistance, entryPrice * 0.92) // 放宽硬底到8%
-    : Math.min(currentPrice + slDistance, entryPrice * 1.08);
-
-  // 盈亏比: 至少1:2 (取aggressive的8/3.5≈2.3, 但至少2)
-  const minRiskReward = Math.max(styleConfig.takeProfitPercent / styleConfig.stopLossPercent, 2.0);
-  const tpDistance = slDistance * minRiskReward;
+    ? Math.max(currentPrice - atrStop, entryPrice * 0.9)
+    : Math.min(currentPrice + atrStop, entryPrice * 1.1);
+  const riskReward = styleConfig.takeProfitPercent / styleConfig.stopLossPercent || 2;
+  const tpDistance = atrStop * riskReward;
   const tpPrice = isLong ? currentPrice + tpDistance : currentPrice - tpDistance;
-
-  // 追踪止盈触发: 至少盈利3%（或ATR的2倍，取大值）
-  const trailActivate = Math.max(styleConfig.trailActivatePercent, atrPercent * 2);
-  const trailStep = styleConfig.trailStepPercent || 2;
-
+  const trailActivate = styleConfig.trailActivatePercent * (1 + (atrPercent - 1) * 0.2);
+  const trailStep = styleConfig.trailStepPercent * (1 + (atrPercent - 1) * 0.1);
   return {
     slPrice: parseFloat(slPrice.toFixed(2)),
     tpPrice: parseFloat(tpPrice.toFixed(2)),
     trailActivatePercent: parseFloat(trailActivate.toFixed(1)),
     trailStepPercent: parseFloat(trailStep.toFixed(1)),
-    atrMultiplier,
-    riskReward: minRiskReward,
-    slDistance: parseFloat(slDistance.toFixed(2)),
-    tpDistance: parseFloat(tpDistance.toFixed(2)),
+    atrMultiplier, riskReward,
   };
 }
 
 /**
  * 动态杠杆计算 — 根据波动率和市场状态自适应调整
- * [改进] 降低杠杆倍数
+ * @param {number} baseLeverage - 风格预设杠杆
+ * @param {number} atrPercent - ATR百分比
+ * @param {string} marketRegime - 市场状态
+ * @returns {number} 调整后的杠杆倍数
  */
 export function calculateDynamicLeverage(baseLeverage, atrPercent, marketRegime) {
-  let adj = 0.7; // [改进] 基准从1降到0.7（更谨慎）
-  if (marketRegime === 'volatile') adj = 0.5;
-  else if (marketRegime === 'trending') adj = 0.8;
-  else if (marketRegime === 'ranging') adj = 0.5;
-  if (atrPercent > 3) adj *= 0.6;
-  else if (atrPercent > 2) adj *= 0.8;
-  else if (atrPercent < 0.5) adj *= 1.0;
+  let adj = 1;
+  if (marketRegime === 'volatile') adj = 0.6;
+  else if (marketRegime === 'trending') adj = 1.3;
+  else if (marketRegime === 'ranging') adj = 0.8;
+  if (atrPercent > 3) adj *= 0.7;
+  else if (atrPercent > 2) adj *= 0.85;
+  else if (atrPercent < 0.5) adj *= 1.2;
   return Math.max(1, Math.round(baseLeverage * adj));
-}
-
-// ============ 错误学习: 连续亏损自动暂停 ============
-// 当符号最近的亏损笔数达到阈值时, 自动暂停该币种交易
-// [改进1] 夏普1笔即生效, 这里再加一层简单规则
-
-/**
- * 检查是否应该暂停某个币种的交易
- * @param {string} symbol 
- * @returns {{ shouldPause: boolean, reason: string, consecutiveLosses: number }}
- */
-export function checkConsecutiveLosses(symbol) {
-  // 从持久化的tradeHistory中找到该币种最近的交易
-  const symbolTrades = tradeHistory.filter(t => t.symbol === symbol).slice(-10);
-  if (symbolTrades.length >= 2) {
-    // 最近连续亏损?
-    let consecLosses = 0;
-    for (let i = symbolTrades.length - 1; i >= 0; i--) {
-      if (symbolTrades[i].pnl <= 0) consecLosses++;
-      else break;
-    }
-    if (consecLosses >= 3) {
-      return { shouldPause: true, reason: `连败${consecLosses}笔, 暂停该币种交易`, consecutiveLosses: consecLosses };
-    }
-    return { shouldPause: false, reason: `连败${consecLosses}笔`, consecutiveLosses: consecLosses };
-  }
-  return { shouldPause: false, reason: '交易记录不足', consecutiveLosses: 0 };
 }
 
 export function getAdaptiveStatus() {
@@ -283,60 +212,52 @@ export function getAdaptiveStatus() {
   return { tradeHistoryCount: tradeHistory.length, stats };
 }
 
-export function resetTradeHistory() {
-  tradeHistory = [];
-  persistTradeHistory();
-}
+export function resetTradeHistory() { tradeHistory = []; }
 
-// ============ 夏普比率追踪 (持久化) ============
-// { 'BTC/USDT:USDT': [0.5, -0.3, 1.2, ...] }
-let symbolReturns = loadFromFile(RETURNS_FILE, {});
+// ============ 夏普比率追踪 ============
 
-export function persistReturns() {
-  saveToFile(RETURNS_FILE, symbolReturns);
-}
+// 每个币种的PnL序列，用于计算夏普比率
+// { 'BTC/USDT:USDT': [0.5, -0.3, 1.2, ...] } — 每笔平仓的真实PnL百分比
+let symbolReturns = {};
 
 /**
  * 记录一笔平仓的收益率
+ * @param {string} symbol 
+ * @param {number} pnlPercent — 百分比形式（如 1.5 表示 +1.5%）
  */
 export function recordReturn(symbol, pnlPercent) {
   if (!symbolReturns[symbol]) symbolReturns[symbol] = [];
   symbolReturns[symbol].push(pnlPercent);
+  // 只保留最近50笔
   if (symbolReturns[symbol].length > 50) {
     symbolReturns[symbol].shift();
   }
-  persistReturns(); // 即时持久化
 }
 
 /**
  * 计算某个币种的夏普比率
- * [改进1] 最低样本数从3降为1(1笔即开始计算)
+ * 夏普 = (平均收益率 - 无风险利率) / 收益率标准差
+ * 无风险利率约等于 0（加密货币市场）
+ * @param {string} symbol 
+ * @param {number} [annualScale=365] — 按日换算年化（默认365天）
+ * @returns {{ sharpe: number, avgReturn: number, stdDev: number, count: number }}
  */
 export function calcSharpeRatio(symbol, annualScale = 365) {
   const returns = symbolReturns[symbol];
-  if (!returns || returns.length < 1) {
-    return { sharpe: 0, avgReturn: 0, stdDev: 0, count: returns?.length || 0, reason: '数据不足' };
+  if (!returns || returns.length < 3) {
+    return { sharpe: 0, avgReturn: 0, stdDev: 0, count: returns?.length || 0, reason: '数据不足(<3笔)' };
   }
-
+  
   const avgReturn = returns.reduce((a, b) => a + b, 0) / returns.length;
-  if (returns.length === 1) {
-    // 只有1笔: 直接用这笔收益判定
-    return {
-      sharpe: parseFloat(avgReturn.toFixed(2)),
-      avgReturn: parseFloat(avgReturn.toFixed(2)),
-      stdDev: 0,
-      count: 1,
-      reason: avgReturn > 0 ? '1笔盈利' : '1笔亏损',
-    };
-  }
   const variance = returns.reduce((sum, r) => sum + (r - avgReturn) ** 2, 0) / (returns.length - 1);
   const stdDev = Math.sqrt(variance);
-
+  
   if (stdDev === 0) return { sharpe: 0, avgReturn, stdDev, count: returns.length, reason: '零波动' };
-
+  
+  // 日频夏普，然后年化
   const dailySharpe = avgReturn / stdDev;
   const sharpe = dailySharpe * Math.sqrt(annualScale);
-
+  
   return {
     sharpe: parseFloat(sharpe.toFixed(2)),
     avgReturn: parseFloat(avgReturn.toFixed(2)),
@@ -346,6 +267,10 @@ export function calcSharpeRatio(symbol, annualScale = 365) {
   };
 }
 
+/**
+ * 获取所有币种的夏普比率
+ * @returns {Object} { 'BTC/USDT:USDT': { sharpe, ... }, ... }
+ */
 export function getAllSharpeRatios() {
   const result = {};
   for (const sym of Object.keys(symbolReturns)) {
@@ -356,27 +281,18 @@ export function getAllSharpeRatios() {
 
 /**
  * 根据夏普比率判断是否继续交易该币种
- * [改进1] 1笔即生效 + 单笔亏损直接拦截
  * @param {string} symbol 
- * @param {number} [minSharpe=-0.5]
+ * @param {number} [minSharpe=-0.5] — 低于此值建议暂停交易
+ * @returns {{ canTrade: boolean, sharpe: number, reason: string }}
  */
 export function shouldTradeSymbol(symbol, minSharpe = -0.5) {
   const stats = calcSharpeRatio(symbol);
-  // 1笔亏损即暂停
-  if (stats.count >= 1 && stats.avgReturn < 0) {
-    return { canTrade: false, sharpe: stats.sharpe, reason: `最近收益${stats.avgReturn.toFixed(2)}%为负，暂停交易` };
-  }
-  // 多笔时才对比夏普
-  if (stats.count >= 2 && stats.sharpe < minSharpe) {
+  if (stats.count < 3) return { canTrade: true, sharpe: stats.sharpe, reason: '数据不足，允许交易' };
+  if (stats.sharpe < minSharpe) {
     return { canTrade: false, sharpe: stats.sharpe, reason: `夏普${stats.sharpe}<${minSharpe}，建议暂停` };
   }
   return { canTrade: true, sharpe: stats.sharpe, reason: stats.reason };
 }
 
 export function getSymbolReturns() { return symbolReturns; }
-export function resetSymbolReturns() {
-  symbolReturns = {};
-  persistReturns();
-}
-
-console.log('[Adapt] 🧬 自适应引擎已加载 (v2.0 — 持久化学习+夏普1笔生效+止损放宽+ADX调高)');
+export function resetSymbolReturns() { symbolReturns = {}; }
