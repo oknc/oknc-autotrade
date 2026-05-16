@@ -220,6 +220,61 @@ async function restCancelAlgoOrder(symbol, algoId) {
   return { success: true };
 }
 
+// ============ 统一条件单创建（支持多交易所） ============
+
+/**
+ * 跨交易所创建条件单（止盈/止损）
+ * 支持 Binance(rest)、OKX(CCXT)、Gate(CCXT)
+ * @param {string} exchangeId - 交易所标识 binance/okx/gate
+ * @param {string} symbol - 交易对
+ * @param {string} side - buy/sell（平仓方向）
+ * @param {string} type - STOP / TAKE_PROFIT
+ * @param {number} quantity - 张数
+ * @param {number} triggerPrice - 触发价格
+ * @param {object} options - 附加参数 { price, reduceOnly, workingType, positionSide }
+ */
+async function createConditionalOrder(exchangeId, symbol, side, type, quantity, triggerPrice, options = {}) {
+  if (exchangeId === 'binance') {
+    // 币安使用 REST Algo API，需传递 positionSide（Hedge Mode 必需）
+    // 注意：Hedge Mode 下不要传 reduceOnly，Binance 会拒绝 [-1106]
+    return restCreateAlgoOrder(symbol, side, type, quantity, triggerPrice, {
+      price: options.price,
+      workingType: options.workingType || 'MARK_PRICE',
+      positionSide: options.positionSide,
+    });
+  }
+  if (exchangeId === 'gate') {
+    return gateCreateAlgoOrder(symbol, side, type, quantity, triggerPrice, {
+      price: options.price,
+      reduceOnly: options.reduceOnly !== false,
+      workingType: options.workingType || 'MARK_PRICE',
+    });
+  }
+  if (exchangeId === 'okx') {
+    try {
+      const ex = getExchange(exchangeId);
+      const orderType = 'market';
+      const isStop = type === 'STOP';
+      let order;
+      if (isStop) {
+        order = await ex.createStopLossOrder(symbol, orderType, side, quantity, null, triggerPrice, {
+          reduceOnly: options.reduceOnly !== false,
+          hedged: true,
+        });
+      } else {
+        order = await ex.createTakeProfitOrder(symbol, orderType, side, quantity, null, triggerPrice, {
+          reduceOnly: options.reduceOnly !== false,
+          hedged: true,
+        });
+      }
+      return { success: true, orderId: String(order.id), stopPrice: triggerPrice, type };
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  }
+  return { success: false, error: `不支持的交易所: ${exchangeId}` };
+}
+
 // ============ Gate REST API（通过 CCXT 统一接口） ============
 
 /** 将 CCXT 符号名转为 Gate API 符号 (ETH/USDT:USDT -> 通过 CCXT market id 转) */
@@ -501,7 +556,7 @@ export function initAllExchanges() {
 }
 
 function getExchange(exchangeId) {
-  const id = exchangeId || activeExchange || 'binance';
+  const id = exchangeId || activeExchange || 'gate';
   const entry = exchanges[id];
   if (entry) return entry.exchange;
   // 未初始化时创建临时只读连接（公共数据查询，不覆盖已认证实例）
@@ -595,6 +650,11 @@ export function getStyles() {
   return STYLE_PRESETS;
 }
 
+/** 检查交易所是否已配置 API Key */
+export function isExchangeConfigured(exchangeId) {
+  return exchangeConfigs.some(c => c.exchangeId === exchangeId && c.apiKey);
+}
+
 export function calculatePosition(totalCapital) {
   const style = STYLE_PRESETS[currentStyle];
   const positionValue = totalCapital * (style.positionPercent / 100);
@@ -616,6 +676,21 @@ function normalizeSymbol(symbol) {
   if (symbol.endsWith('/USDT')) return symbol + ':USDT';
   if (symbol.endsWith('/BUSD')) return symbol.replace('/BUSD', '/USDT') + ':USDT';
   return symbol;
+}
+
+/** OKX合约：传递 hedged=true 让 CCXT 自动设置 posSide */
+function okxParams(exchangeId, side, isClose) {
+  if (exchangeId !== 'okx') return {};
+  // 双向持仓模式，CCXT会根据买卖方向自动设置 posSide: long/short
+  return { hedged: true };
+}
+
+/** 获取订单附加参数（交易所差异处理） */
+function binanceOrderParams(side) {
+  // Binance 双向持仓模式需要 positionSide
+  const posSide = (side === 'long' || side === 'buy') ? 'LONG' : (side === 'short' || side === 'sell') ? 'SHORT' : null;
+  if (!posSide) return {};
+  return { positionSide: posSide };
 }
 
 
@@ -689,7 +764,7 @@ export async function openPosition(symbol, side, contracts, exchangeId, options 
       }
     } catch(e) { console.log('[openPosition] 精度调整失败:', e.message); }
 
-    const order = await ex.createMarketOrder(symbol, orderSide, contracts);
+    const order = await ex.createMarketOrder(symbol, orderSide, contracts, undefined, { ...okxParams(exchangeId, side), ...binanceOrderParams(side) });
     const filledPrice = order.price || markPrice;
 
     // 先清理该币对已有的旧订单（普通单+Algo条件单）
@@ -725,9 +800,10 @@ export async function openPosition(symbol, side, contracts, exchangeId, options 
 
     if (options.stopLoss !== false) {
       try {
-        const result = await restCreateAlgoOrder(symbol, reduceSide, 'STOP', contracts, slPrice, {
-          price: slPrice, reduceOnly: true, workingType: 'MARK_PRICE',
-        }, exchangeId);
+        const posSide = side === 'long' ? 'LONG' : 'SHORT';
+        const result = await createConditionalOrder(exchangeId, symbol, reduceSide, 'STOP', contracts, slPrice, {
+          price: slPrice, reduceOnly: true, workingType: 'MARK_PRICE', positionSide: posSide,
+        });
         if (result.success) {
           appendCexLog('algo_create', `[${getExchangeLabel(exchangeId)}] 创建止损 ${symbol} $${slPrice} ${contracts}张`, { type: 'STOP', price: slPrice, contracts });
         } else {
@@ -739,9 +815,10 @@ export async function openPosition(symbol, side, contracts, exchangeId, options 
     }
     if (options.takeProfit !== false) {
       try {
-        const result = await restCreateAlgoOrder(symbol, reduceSide, 'TAKE_PROFIT', contracts, tpPrice, {
-          price: tpPrice, reduceOnly: true, workingType: 'MARK_PRICE',
-        }, exchangeId);
+        const posSide = side === 'long' ? 'LONG' : 'SHORT';
+        const result = await createConditionalOrder(exchangeId, symbol, reduceSide, 'TAKE_PROFIT', contracts, tpPrice, {
+          price: tpPrice, reduceOnly: true, workingType: 'MARK_PRICE', positionSide: posSide,
+        });
         if (result.success) {
           appendCexLog('algo_create', `[${getExchangeLabel(exchangeId)}] 创建止盈 ${symbol} $${tpPrice} ${contracts}张`, { type: 'TAKE_PROFIT', price: tpPrice, contracts });
         } else {
@@ -775,6 +852,7 @@ export async function closePosition(symbol, side, exchangeId, options = {}) {
     // 记录开仓信息用于计算盈亏
     const entryPrice = pos.entryPrice;
     const posSide = pos.side;
+    const contractSize = ex.market(symbol)?.contractSize || 1;
 
     const contracts = options.percent
       ? Math.abs(pos.contracts) * (options.percent / 100)
@@ -794,17 +872,20 @@ export async function closePosition(symbol, side, exchangeId, options = {}) {
     } catch {}
 
     const orderSide = side === 'long' ? 'sell' : 'buy';
-    const order = await ex.createMarketOrder(symbol, orderSide, contracts, undefined, { reduceOnly: true });
+    const extraParams = { ...okxParams(exchangeId, side), ...binanceOrderParams(side) };
+    if (exchangeId !== 'binance') extraParams.reduceOnly = true;
+    const order = await ex.createMarketOrder(symbol, orderSide, contracts, undefined, extraParams);
 
-    // 计算实际盈亏
-    const closePrice = (order.average || order.price || 0);
+    // 计算实际盈亏（有ticker兜底，应付OKX不返回成交价的case）
+    const _closeTicker = order.average || order.price ? null : await ex.fetchTicker(symbol).catch(() => null);
+    const closePrice = (order.average || order.price || _closeTicker?.last || 0);
     let realizedPnl = 0, pnlPercent = 0;
     if (closePrice > 0 && entryPrice > 0) {
       if (side === 'long') {
-        realizedPnl = (closePrice - entryPrice) * contracts;
+        realizedPnl = (closePrice - entryPrice) * contracts * contractSize;
         pnlPercent = ((closePrice / entryPrice) - 1) * 100;
       } else {
-        realizedPnl = (entryPrice - closePrice) * contracts;
+        realizedPnl = (entryPrice - closePrice) * contracts * contractSize;
         pnlPercent = (1 - (closePrice / entryPrice)) * 100;
       }
     }
@@ -930,6 +1011,7 @@ export async function createStopOrder(symbol, side, contracts, stopPrice, exchan
     const ex = getExchange(exchangeId);
     const orderType = options.type === 'take_profit' ? 'TAKE_PROFIT_MARKET' : 'STOP_MARKET';
     const order = await ex.createOrder(symbol, orderType, side, contracts, null, {
+      ...okxParams(exchangeId, side), ...binanceOrderParams(side),
       stopPrice,
       reduceOnly: options.reduceOnly !== false,
       workingType: 'MARK_PRICE',
@@ -948,6 +1030,7 @@ export async function createStopLimitOrder(symbol, side, contracts, price, stopP
     const ex = getExchange(exchangeId);
     const orderType = options.type === 'take_profit' ? 'take_profit' : 'stop';
     const order = await ex.createOrder(symbol, orderType, side, contracts, price, {
+      ...okxParams(exchangeId, side), ...binanceOrderParams(side),
       stopPrice,
       reduceOnly: options.reduceOnly !== false,
     });
@@ -1021,7 +1104,7 @@ export async function updateStopOrders(symbol, side, stopLossPrice, takeProfitPr
 }
 
 // ============ REST API 导出 ============
-export { restCreateOrder, restCancelOrder, restCancelAllOrders, restGetOpenOrders, restCreateAlgoOrder, restCancelAlgoOrder, toBinanceSymbol, binanceRequest };
+export { restCreateOrder, restCancelOrder, restCancelAllOrders, restGetOpenOrders, restCreateAlgoOrder, restCancelAlgoOrder, toBinanceSymbol, binanceRequest, createConditionalOrder };
 
 // ============ 初始化 ============
 loadExchangeConfigs();

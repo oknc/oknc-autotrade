@@ -1,76 +1,52 @@
 {
-  "timestamp": "2026-05-14T23:01:50.872Z",
-  "sentimentScore": 65,
-  "sentimentLabel": "bullish",
+  "timestamp": "2026-05-15T23:02:06.452Z",
+  "sentimentScore": -15,
+  "sentimentLabel": "bearish",
   "keyEvents": [
     {
       "asset": "BTC",
-      "impact": "positive",
-      "weight": 0.9,
-      "description": "比特币突破82,000美元，CLARITY法案推进推动Coinbase股价上涨"
-    },
-    {
-      "asset": "BTC",
-      "impact": "positive",
+      "impact": "negative",
       "weight": 0.8,
-      "description": "比特币投资产品上周吸引约7亿美元资金流入，机构持续加仓"
+      "description": "美联储利率政策担忧加剧，BTC跌至79,000美元附近，日跌幅2.49%"
     },
     {
       "asset": "整体市场",
       "impact": "positive",
-      "weight": 0.7,
-      "description": "CLARITY法案拟将比特币列为CFTC监管的数字大宗商品，市场定价通过概率62-67%"
-    },
-    {
-      "asset": "ETH",
-      "impact": "positive",
       "weight": 0.6,
-      "description": "以太坊在2,244美元附近企稳，搜索热度回升"
+      "description": "CLARITY法案参议院投票推进，将影响未来1-2年加密监管框架"
     },
     {
-      "asset": "ETH",
-      "impact": "neutral",
-      "weight": 0.3,
-      "description": "2015年ETH预售钱包转移400枚ETH，但未引起价格大幅波动"
-    },
-    {
-      "asset": "ETH",
+      "asset": "BTC",
       "impact": "positive",
       "weight": 0.7,
-      "description": "分析指出CLARITY法案框架可能间接利好以太坊生态，提供更清晰监管指引"
+      "description": "比特币鲸鱼累计囤积27万枚BTC，机构资金流入7亿美元"
     },
     {
       "asset": "SOL",
       "impact": "positive",
-      "weight": 0.5,
-      "description": "Solana联合创始人预测DeFi交易成本将低于中心化交易所，利好链上交易"
-    },
-    {
-      "asset": "整体市场",
-      "impact": "positive",
-      "weight": 0.6,
-      "description": "Galaxy Digital与SharpLink成立1.25亿美元DeFi专项基金，机构资本涌入"
-    },
-    {
-      "asset": "BTC",
-      "impact": "neutral",
       "weight": 0.4,
-      "description": "CME比特币波动率期货拟6月1日上线，提供新风险管理工具"
+      "description": "Solana 'Alpenglow'升级开放测试，有望大幅提升网络性能"
+    },
+    {
+      "asset": "ETH",
+      "impact": "neutral",
+      "weight": 0.3,
+      "description": "以太坊在2,244美元附近企稳，搜索热度回升，分析师看多至4,000美元"
     },
     {
       "asset": "整体市场",
       "impact": "neutral",
       "weight": 0.3,
-      "description": "代币化国债规模达150亿美元，美联储加息担忧加剧"
+      "description": "代币化国债规模突破150亿美元，美联储加息忧虑推动RWA增长"
     }
   ],
   "marketFactors": {
-    "macro": "neutral",
+    "macro": "negative",
     "regulatory": "positive",
-    "narrative": "监管清晰化推动机构资金入场，但宏观加息担忧限制上行空间"
+    "narrative": "宏观流动性收紧与监管利好博弈，鲸鱼囤积显示长期信心"
   },
-  "riskLevel": "medium",
-  "actionableAdvice": "关注CLARITY法案进展，可逢低布局BTC和ETH，同时留意美联储利率决议对市场的影响",
-  "summary": "市场情绪偏多，监管利好和机构资金流入主导，但宏观不确定性仍存，短期保持谨慎乐观",
-  "newsDate": "2026-05-14"
+  "riskLevel": "high",
+  "actionableAdvice": "短期市场波动加大，建议观望为主，关注BTC 79,000美元支撑位，中长期可逢低布局优质资产",
+  "summary": "美联储鹰派担忧压制市场情绪，但监管进展与机构囤积提供底部支撑，短期震荡偏弱",
+  "newsDate": "2026-05-15"
 }
