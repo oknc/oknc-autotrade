@@ -24,23 +24,28 @@ let strategyTimer = null;
 let checkTimer = null;
 let activeSymbols = ['ETH/USDT'];
 let _consecutiveLosses = 0;  // 全局连败计数（用于自动降级）
-let symbolExchange = {};      // { 'ETH/USDT': 'binance'|'gate' } — 每个交易对所属交易所
-let currentSignals = {};      // { 'ETH/USDT': { trend, meanReversion, combined, decision } }
+let symbolExchange = {};      // { 'ETH/USDT': 'binance'|'gate' } — 每个交易对所属交易所（向后兼容）
+let exchangeSymbols = {};     // { 'binance': ['BTC/USDT:USDT'], 'okx': ['BTC/USDT:USDT'] } — 多交易所并行
+let currentSignals = {};      // { 'BTC/USDT:USDT::binance': { trend, meanReversion, combined, decision } }
 let positionHistory = [];     // 策略开平记录
-let autoOpenedPositions = new Set(); // 跟踪策略自动开仓的symbol
+let autoOpenedPositions = new Set(); // 跟踪策略自动开仓的symbol, 存 symbol+'::'+exchangeId
 let strategyMode = process.env.CEX_STRATEGY_MODE || 'single';   // 'single' = 单币, 'dual' = 双币(BTC+ETH)
 let primarySymbol = 'BTC/USDT:USDT'; // 单币模式下的主交易对
 let unsubscribeFns = [];      // WebSocket 取消订阅函数
 
-/** 获取交易对对应的交易所ID（默认 gate） */
+/** 获取交易对对应的交易所ID（默认 gate） — 向后兼容，新代码应直接使用exchangeId */
 function getExchangeId(symbol) {
   return symbolExchange[symbol] || 'gate';
 }
 
-/** 设置交易对对应的交易所 */
-export function setSymbolExchange(symbol, exchangeId) {
-  symbolExchange[symbol] = exchangeId;
-  console.log(`[Strategy] 🔄 ${symbol} 交易所设为 ${exchangeId}`);
+/** 将symbol加入指定交易所的交易列表 */
+export function addExchangeSymbol(symbol, exchangeId) {
+  if (!exchangeSymbols[exchangeId]) exchangeSymbols[exchangeId] = [];
+  if (!exchangeSymbols[exchangeId].includes(symbol)) {
+    exchangeSymbols[exchangeId].push(symbol);
+  }
+  symbolExchange[symbol] = exchangeId; // 向后兼容
+  console.log(`[Strategy] 🔄 ${symbol} 加入交易所 ${exchangeId}`);
 }
 
 /** 获取所有交易对的交易所映射 */
@@ -146,11 +151,11 @@ function calcBollingerBands(data, period = BB_PERIOD, std = BB_STD) {
  * 高级别K线趋势过滤（1小时/4小时）
  * 防止逆大趋势开仓
  */
-function getHigherTFtrend(symbol) {
+function getHigherTFtrend(symbol, exchangeId) {
   // 使用15分钟K线（更快响应），配合EMA8/21更敏感
-  let klines = cexData.getKlines(symbol, '15m', 96);
+  let klines = cexData.getKlines(symbol, '15m', 96, exchangeId);
   if (!klines || klines.length < 30) {
-    klines = cexData.getKlines(symbol, '1h', 30);
+    klines = cexData.getKlines(symbol, '1h', 30, exchangeId);
     if (!klines || klines.length < 20) return 'neutral';
   }
   
@@ -193,8 +198,8 @@ function getHigherTFtrend(symbol) {
  * 趋势跟踪信号
  * 返回: { direction: 'long'|'short'|'neutral', confidence: 0-100, reason: string }
  */
-function generateTrendSignal(symbol) {
-  const klines = cexData.getKlines(symbol, '15m', 50);
+function generateTrendSignal(symbol, exchangeId) {
+  const klines = cexData.getKlines(symbol, '15m', 50, exchangeId);
   if (klines.length < EMA_SLOW) {
     return { direction: 'neutral', confidence: 0, reason: '数据不足' };
   }
@@ -255,8 +260,8 @@ function generateTrendSignal(symbol) {
  * 均值回归信号
  * 返回: { direction: 'long'|'short'|'neutral', confidence: 0-100, reason: string }
  */
-function generateMeanReversionSignal(symbol) {
-  const klines = cexData.getKlines(symbol, '15m', 50);
+function generateMeanReversionSignal(symbol, exchangeId) {
+  const klines = cexData.getKlines(symbol, '15m', 50, exchangeId);
   if (klines.length < RSI_PERIOD + 5) {
     return { direction: 'neutral', confidence: 0, reason: '数据不足' };
   }
@@ -317,7 +322,7 @@ function generateMeanReversionSignal(symbol) {
 /**
  * 根据风格合并两个信号
  */
-function combineSignals(trend, meanRev, style, symbol, marketRegime) {
+function combineSignals(trend, meanRev, style, symbol, marketRegime, exchangeId) {
   const styleConfig = cexEngine.STYLE_PRESETS[style];
   const minConfirm = styleConfig.minSignalConfirm;
   const intelFactors = cexIntel.getAdjustmentFactors();
@@ -351,9 +356,9 @@ function combineSignals(trend, meanRev, style, symbol, marketRegime) {
     direction = 'long';
     confidence = Math.min(trend.confidence + meanRev.confidence, 100);
     reasons = [`趋势:${trend.reason}`, `均值:${meanRev.reason}`];
-    const htf = getHigherTFtrend(symbol);
+const htf = getHigherTFtrend(symbol, exchangeId);
     if (htf === 'short' || htf === 'weak_short') {
-      confidence = Math.floor(confidence * 0.4);
+      if (meanRev.direction === 'long' || meanRev.confidence >= 40)
       reasons.push(`⚠️逆1h趋势(${htf})降权`);
     } else if (htf === 'long') {
       reasons.push(`✅顺1h趋势`);
@@ -363,9 +368,9 @@ function combineSignals(trend, meanRev, style, symbol, marketRegime) {
     direction = 'short';
     confidence = Math.min(trend.confidence + meanRev.confidence, 100);
     reasons = [`趋势:${trend.reason}`, `均值:${meanRev.reason}`];
-    const htf = getHigherTFtrend(symbol);
-    if (htf === 'long' || htf === 'weak_long') {
-      confidence = Math.floor(confidence * 0.4);
+const htf = getHigherTFtrend(symbol, exchangeId);
+    if (htf === 'short' || htf === 'weak_short') {
+      if (meanRev.direction === 'long' || meanRev.confidence >= 40)
       reasons.push(`⚠️逆1h趋势(${htf})降权`);
     } else if (htf === 'short') {
       reasons.push(`✅顺1h趋势`);
@@ -379,9 +384,9 @@ function combineSignals(trend, meanRev, style, symbol, marketRegime) {
       confidence = stronger.confidence;
       reasons = [`单一信号:${stronger.reason}`];
       // 高级别趋势过滤
-      const htf = getHigherTFtrend(symbol);
+const htf = getHigherTFtrend(symbol, exchangeId);
       const isAgainst = (direction === 'long' && (htf === 'short' || htf === 'weak_short'))
-                     || (direction === 'short' && (htf === 'long' || htf === 'weak_long'));
+        || (direction === 'short' && (htf === 'long' || htf === 'weak_long'));
       if (isAgainst) {
         confidence = Math.floor(confidence * 0.4);
         reasons.push(`⚠️逆1h趋势(${htf})降权`);
@@ -396,9 +401,9 @@ function combineSignals(trend, meanRev, style, symbol, marketRegime) {
       direction = trend.direction;
       confidence = trend.confidence;
       reasons = [`趋势为主:${trend.reason}`];
-      const htf = getHigherTFtrend(symbol);
+const htf = getHigherTFtrend(symbol, exchangeId);
       const isAgainst = (direction === 'long' && (htf === 'short' || htf === 'weak_short'))
-                     || (direction === 'short' && (htf === 'long' || htf === 'weak_long'));
+        || (direction === 'short' && (htf === 'long' || htf === 'weak_long'));
       if (isAgainst) { confidence = Math.floor(confidence * 0.4); reasons.push(`⚠️逆1h趋势降权`); }
       action = confidence >= 30 ? (direction === 'long' ? 'open_long' : 'open_short') : 'hold';
     } else if (meanRev.direction !== 'neutral' && meanRev.confidence >= 50) {
@@ -435,10 +440,12 @@ async function evaluateStrategy() {
   const style = cexEngine.getCurrentStyle();
   const styleName = style.style;
 
-  for (const symbol of activeSymbols) {
+  for (const [exchangeId, symbols] of Object.entries(exchangeSymbols)) {
+    for (const symbol of symbols) {
+      const key = symbol + '::' + exchangeId;
     try {
       // 获取当前持仓
-      const posResult = await cexEngine.getPositions(getExchangeId(symbol), symbol);
+      const posResult = await cexEngine.getPositions(exchangeId, symbol);
       const positions = posResult.positions || [];
       // 标准化比较: ETH/USDT vs ETH/USDT:USDT
       const currentPosition = positions.find(p => 
@@ -449,7 +456,7 @@ async function evaluateStrategy() {
       let marketRegime = 'unknown';
       let signalWeights = { trendWeight: 0.5, meanRevWeight: 0.5 };
       try {
-        const klines = cexData.getKlines(symbol, '15m', 50);
+        const klines = cexData.getKlines(symbol, '15m', 50, exchangeId);
         if (klines && klines.length > 15) {
           const highs = klines.map(k => k.high);
           const lows = klines.map(k => k.low);
@@ -459,17 +466,17 @@ async function evaluateStrategy() {
         }
       } catch(e) {}
       // 市场状态3次确认队列
-      if (!regimeQueues[symbol]) regimeQueues[symbol] = [];
-      regimeQueues[symbol].push(marketRegime);
-      if (regimeQueues[symbol].length > 3) regimeQueues[symbol].shift();
-      const regimeConfirmed = regimeQueues[symbol].length >= 3
-        && regimeQueues[symbol].every(r => r === regimeQueues[symbol][0]);
+      if (!regimeQueues[key]) regimeQueues[key] = [];
+      regimeQueues[key].push(marketRegime);
+      if (regimeQueues[key].length > 3) regimeQueues[key].shift();
+      const regimeConfirmed = regimeQueues[key].length >= 3
+        && regimeQueues[key].every(r => r === regimeQueues[key][0]);
       const intelFactors = cexIntel.getAdjustmentFactors();
-      console.log(`[Adapt] 🌐 ${symbol}: ${marketRegime} ${regimeConfirmed ? '✅已确认' : '⏳待确认'} (队列:${regimeQueues[symbol].join(',')}, 趋势${(signalWeights.trendWeight*100).toFixed(0)}%/均值${(signalWeights.meanRevWeight*100).toFixed(0)}%)`);
+      console.log(`[Adapt] 🌐 ${key}: ${marketRegime} ${regimeConfirmed ? '✅已确认' : '⏳待确认'} (队列:${regimeQueues[key].join(',')}, 趋势${(signalWeights.trendWeight*100).toFixed(0)}%/均值${(signalWeights.meanRevWeight*100).toFixed(0)}%)`);
 
       // 生成信号
-      const trendSignal = generateTrendSignal(symbol);
-      const meanRevSignal = generateMeanReversionSignal(symbol);
+      const trendSignal = generateTrendSignal(symbol, exchangeId);
+      const meanRevSignal = generateMeanReversionSignal(symbol, exchangeId);
       // 加权信号: 根据市场状态调整权重
       const weightedScore = (trendSignal.score || 0) * signalWeights.trendWeight + (meanRevSignal.score || 0) * signalWeights.meanRevWeight;
       const weightedConfidence = Math.min(Math.abs(weightedScore), 70);
@@ -483,9 +490,9 @@ async function evaluateStrategy() {
         meanRev: meanRevSignal,
         regime: marketRegime,
       };
-      const combined = combineSignals(trendSignal, meanRevSignal, styleName, symbol, marketRegime);
+const combined = combineSignals(trendSignal, meanRevSignal, currentStyle.style, symbol, marketRegime, exchangeId);
 
-      currentSignals[symbol] = {
+      currentSignals[key] = {
         timestamp: Date.now(),
         trend: trendSignal,
         meanReversion: meanRevSignal,
@@ -500,45 +507,45 @@ async function evaluateStrategy() {
         if ((posSide === 'long' && combined.direction === 'short') ||
             (posSide === 'short' && combined.direction === 'long')) {
           // 市场状态确认队列: 如果状态刚切换但未确认(队列不到3次)，暂缓平仓
-          const inQueue = regimeQueues[symbol] || [];
+          const inQueue = regimeQueues[key] || [];
           const currentRegime = signalWeights.regime || 'unknown';
           const justFlipped = inQueue.length >= 2 && inQueue[0] !== currentRegime;
           const regimeStable = inQueue.length < 3 || inQueue.every(r => r === inQueue[0]);
           if (justFlipped && !regimeStable) {
-            console.log(`[Strategy] ⏳ ${symbol}: 信号反转但市场状态切换未确认(队列:${inQueue.join(',')}), 等待确认`);
+            console.log(`[Strategy] ⏳ ${key}: 信号反转但市场状态切换未确认(队列:${inQueue.join(',')}), 等待确认`);
           } else {
                     // Signal flip buffer: require 2 consecutive same-direction flips
-          if (!signalFlipCount[symbol]) signalFlipCount[symbol] = { long: 0, short: 0 };
+          if (!signalFlipCount[key]) signalFlipCount[key] = { long: 0, short: 0 };
           const flipDir = combined.direction;
-          const currentFlip = signalFlipCount[symbol];
+          const currentFlip = signalFlipCount[key];
           if (currentFlip[flipDir] < 1) {
             currentFlip.long = 0;
             currentFlip.short = 0;
             currentFlip[flipDir] = 1;
-            console.log(`[Strategy] ${symbol}: 信号翻转至${flipDir}(第1次), 等待下次确认`);
+            console.log(`[Strategy] ${key}: 信号翻转至${flipDir}(第1次), 等待下次确认`);
           } else {
             // 只平自动开仓的单，跳过手动开仓
-            if (!autoOpenedPositions.has(symbol)) {
-              console.log(`[Strategy] ⏭ ${symbol}: 信号翻转但为手动仓，跳过`);
+            if (!autoOpenedPositions.has(key)) {
+              console.log(`[Strategy] ⏭ ${key}: 信号翻转但为手动仓，跳过`);
               continue;
             }
-            console.log(`[Strategy] ${symbol}: 信号翻转至${flipDir}(已确认), 平${posSide}仓`);
+            console.log(`[Strategy] ${key}: 信号翻转至${flipDir}(已确认), 平${posSide}仓`);
             currentFlip.long = 0;
             currentFlip.short = 0;
-const closeResult = await cexEngine.closePosition(symbol, posSide, getExchangeId(symbol));
+const closeResult = await cexEngine.closePosition(symbol, posSide, exchangeId);
           if (closeResult.success && closeResult.realizedPnl !== undefined) {
-            appendCexLog('auto_close', `[${cexEngine.getExchangeLabel(getExchangeId(symbol))}] 策略平${posSide === 'long' ? '多' : '空'} ${symbol} ${(currentPosition?.contracts || '?').toString().padEnd(6)}张 @${closeResult.closePrice} PnL:${closeResult.realizedPnl>0?'+':''}$${closeResult.realizedPnl?.toFixed(2)||'?'} (${closeResult.pnlPercent>0?'+':''}${closeResult.pnlPercent?.toFixed(2)||'?'}%)`, {
+            appendCexLog('auto_close', `[${cexEngine.getExchangeLabel(exchangeId)}] 策略平${posSide === 'long' ? '多' : '空'} ${symbol} ${(currentPosition?.contracts || '?').toString().padEnd(6)}张 @${closeResult.closePrice} PnL:${closeResult.realizedPnl>0?'+':''}$${closeResult.realizedPnl?.toFixed(2)||'?'} (${closeResult.pnlPercent>0?'+':''}${closeResult.pnlPercent?.toFixed(2)||'?'}%)`, {
               realizedPnl: closeResult.realizedPnl,
               pnlPercent: closeResult.pnlPercent,
               entryPrice: closeResult.entryPrice,
               contracts: currentPosition?.contracts,
             });
-            if (closeResult.pnlPercent !== undefined) adaptive.recordReturn(symbol, closeResult.pnlPercent);
+            if (closeResult.pnlPercent !== undefined) adaptive.recordReturn(key, closeResult.pnlPercent);
             // [v2.0修复] 记录凯利交易数据
             try {
               if (closeResult.pnlPercent !== undefined && currentPosition) {
                 adaptive.recordTrade({
-                  timestamp: Date.now(), symbol, side: posSide,
+                  timestamp: Date.now(), symbol: key, side: posSide,
                   entryPrice: currentPosition.entryPrice || closeResult.entryPrice,
                   exitPrice: closeResult.closePrice,
                   contracts: currentPosition?.contracts,
@@ -551,7 +558,7 @@ const closeResult = await cexEngine.closePosition(symbol, posSide, getExchangeId
                 });
               }
             } catch(e) {}
-            await riskManager.onPositionClosed(symbol, posSide, closeResult.realizedPnl, closeResult.pnlPercent, getExchangeId(symbol));
+            await riskManager.onPositionClosed(symbol, posSide, closeResult.realizedPnl, closeResult.pnlPercent, exchangeId);
             // 连败跟踪与自动降级
             if (closeResult.realizedPnl < 0) {
               _consecutiveLosses = (_consecutiveLosses || 0) + 1;
@@ -569,11 +576,11 @@ const closeResult = await cexEngine.closePosition(symbol, posSide, getExchangeId
               _consecutiveLosses = 0;
             }
           } else {
-            appendCexLog('auto_close', `[${cexEngine.getExchangeLabel(getExchangeId(symbol))}] 策略平${posSide === 'long' ? '多' : '空'} ${symbol} ${(currentPosition?.contracts || '?').toString().padEnd(6)}张 (信号反转) PnL:${closeResult.realizedPnl>0?'+':''}$${closeResult.realizedPnl?.toFixed(2)||'?'} (${closeResult.pnlPercent>0?'+':''}${closeResult.pnlPercent?.toFixed(2)||'?'}%)`, { realizedPnl: closeResult.realizedPnl, pnlPercent: closeResult.pnlPercent, contracts: currentPosition?.contracts });
+            appendCexLog('auto_close', `[${cexEngine.getExchangeLabel(exchangeId)}] 策略平${posSide === 'long' ? '多' : '空'} ${symbol} ${(currentPosition?.contracts || '?').toString().padEnd(6)}张 (信号反转) PnL:${closeResult.realizedPnl>0?'+':''}$${closeResult.realizedPnl?.toFixed(2)||'?'} (${closeResult.pnlPercent>0?'+':''}${closeResult.pnlPercent?.toFixed(2)||'?'}%)`, { realizedPnl: closeResult.realizedPnl, pnlPercent: closeResult.pnlPercent, contracts: currentPosition?.contracts });
           }
           positionHistory.push({
             timestamp: Date.now(),
-            symbol,
+            symbol: key,
             action: `close_${posSide}`,
             reason: `信号反转: ${combined.reason}`,
             style: styleName,
@@ -586,21 +593,21 @@ const closeResult = await cexEngine.closePosition(symbol, posSide, getExchangeId
       // 风控检查
       const riskStatus = await riskManager.getRiskStatus();
       if (!riskStatus.canTrade) {
-        console.log(`[Strategy] ⛔ ${symbol}: 风控拦截 (${riskStatus.dailyPnlPercent.toFixed(1)}%)`);
+        console.log(`[Strategy] ⛔ ${key}: 风控拦截 (${riskStatus.dailyPnlPercent.toFixed(1)}%)`);
         continue;
       }
 
       // 夏普比率检查
-      const sharpeCheck = adaptive.shouldTradeSymbol ? adaptive.shouldTradeSymbol(symbol) : { canTrade: true };
+      const sharpeCheck = adaptive.shouldTradeSymbol ? adaptive.shouldTradeSymbol(key) : { canTrade: true };
       if (!sharpeCheck.canTrade) {
-        console.log(`[Strategy] ⛔ ${symbol}: 夏普拦截 (${sharpeCheck.sharpe}) — ${sharpeCheck.reason}`);
+        console.log(`[Strategy] ⛔ ${key}: 夏普拦截 (${sharpeCheck.sharpe}) — ${sharpeCheck.reason}`);
         continue;
       }
 
       // [改进v2] 连续亏损检查：连败≥3笔暂停该币种
-      const consecCheck = adaptive.checkConsecutiveLosses ? adaptive.checkConsecutiveLosses(symbol) : { shouldPause: false };
+      const consecCheck = adaptive.checkConsecutiveLosses ? adaptive.checkConsecutiveLosses(key) : { shouldPause: false };
       if (consecCheck.shouldPause) {
-        console.log(`[Strategy] ⛔ ${symbol}: ${consecCheck.reason}`);
+        console.log(`[Strategy] ⛔ ${key}: ${consecCheck.reason}`);
         continue;
       }
 
@@ -611,11 +618,11 @@ const closeResult = await cexEngine.closePosition(symbol, posSide, getExchangeId
         // 止损冷却期内不开仓
         const lastSl = lastStopLossTime[symbol] || 0;
         if ((Date.now() - lastSl) < STOP_LOSS_COOLDOWN_MS) {
-          console.log(`[Strategy] ⏸ ${symbol}: 止损冷却中 (${Math.round((STOP_LOSS_COOLDOWN_MS - (Date.now() - lastSl))/1000)}s 剩余)，跳过`);
+          console.log(`[Strategy] ⏸ ${key}: 止损冷却中 (${Math.round((STOP_LOSS_COOLDOWN_MS - (Date.now() - lastSl))/1000)}s 剩余)，跳过`);
           continue;
         }
         try {
-          const allPosResult = await cexEngine.getPositions(getExchangeId(symbol));
+          const allPosResult = await cexEngine.getPositions(exchangeId);
           const allPositions = allPosResult.positions || [];
           // 检查当前交易对是否已有仓位（任何方向）
           const hasSameSymbolPos = allPositions.some(p => {
@@ -624,19 +631,19 @@ const closeResult = await cexEngine.closePosition(symbol, posSide, getExchangeId
             return psym === ssym && p.contracts && Math.abs(p.contracts) > 0;
           });
           if (hasSameSymbolPos) {
-            console.log(`[Strategy] ⏸ ${symbol}: 已有同币持仓，跳过`);
+            console.log(`[Strategy] ⏸ ${key}: 已有同币持仓，跳过`);
             continue;
           }
         } catch(e) {}
         const side = combined.action === 'open_long' ? 'long' : 'short';
         // ====== 自适应仓位管理 ======
-        const bal = await cexEngine.getBalance(getExchangeId(symbol));
+        const bal = await cexEngine.getBalance(exchangeId);
         // ② 使用可用余额（已有持仓时扣除已用保证金）
         const totalCap = bal.free || bal.total || 30;
         // 双币模式：每个币种分一半资金，单币模式：全给主币
         const modeSplit = (strategyMode === 'dual' && activeSymbols.length > 1) ? 0.5 : 1.0;
         const cappedCap = totalCap * modeSplit;
-        const ticker = await cexEngine.getTicker(symbol, getExchangeId(symbol));
+        const ticker = await cexEngine.getTicker(symbol, exchangeId);
         const price = ticker.last || ticker.markPrice;
         const posCalc = cexEngine.calculatePosition(totalCap);
         // ④ 动态杠杆：根据ATR和市场状态调整
@@ -652,15 +659,15 @@ const closeResult = await cexEngine.closePosition(symbol, posSide, getExchangeId
             if (atr && atr.atrPercent > 0) {
               atrInfo = atr;
               dynLeverage = adaptive.calculateDynamicLeverage(posCalc.leverage || 5, atr.atrPercent, marketRegime);
-              console.log(`[Strategy] ⚙️ ${symbol}: 动态杠杆 ${posCalc.leverage}x→${dynLeverage}x (ATR:${atr.atrPercent.toFixed(1)}%, ${marketRegime})`);
+              console.log(`[Strategy] ⚙️ ${key}: 动态杠杆 ${posCalc.leverage}x→${dynLeverage}x (ATR:${atr.atrPercent.toFixed(1)}%, ${marketRegime})`);
             }
           }
         } catch(e) {}
         // 低波动率过滤：ATR < 0.25% 且已有连败记录 → 不开仓避免横盘磨损
         if (atrInfo && atrInfo.atrPercent < 0.25 && consecCheck.shouldPause === false && adaptive.checkConsecutiveLosses) {
-          const lossCheck = adaptive.checkConsecutiveLosses(symbol);
+          const lossCheck = adaptive.checkConsecutiveLosses(key);
           if (lossCheck.consecutiveLosses >= 1) {
-            console.log(`[Strategy] ⏸ ${symbol}: 波动率过低(ATR:${atrInfo.atrPercent.toFixed(2)}%), 连败${lossCheck.consecutiveLosses}次, 横盘不开仓`);
+            console.log(`[Strategy] ⏸ ${key}: 波动率过低(ATR:${atrInfo.atrPercent.toFixed(2)}%), 连败${lossCheck.consecutiveLosses}次, 横盘不开仓`);
             continue;
           }
         }
@@ -679,23 +686,23 @@ const closeResult = await cexEngine.closePosition(symbol, posSide, getExchangeId
           contracts = parseFloat((contracts * intelFactors.positionMultiplier).toFixed(6));
           const origLev = dynLeverage;
           dynLeverage = parseFloat(Math.max(1, (dynLeverage * intelFactors.leverageMultiplier)).toFixed(1));
-          console.log(`[Intel] ${symbol}: 情报调整 仓位${(intelFactors.positionMultiplier*100-100).toFixed(0) > 0 ? '+' : ''}${(intelFactors.positionMultiplier*100-100).toFixed(0)}%(${origContracts}->${contracts}) 杠杆${(intelFactors.leverageMultiplier*100-100).toFixed(0) > 0 ? '+' : ''}${(intelFactors.leverageMultiplier*100-100).toFixed(0)}%(${origLev}->${dynLeverage}x) [${intelFactors.sentiment}]`);
+          console.log(`[Intel] ${key}: 情报调整 仓位${(intelFactors.positionMultiplier*100-100).toFixed(0) > 0 ? '+' : ''}${(intelFactors.positionMultiplier*100-100).toFixed(0)}%(${origContracts}->${contracts}) 杠杆${(intelFactors.leverageMultiplier*100-100).toFixed(0) > 0 ? '+' : ''}${(intelFactors.leverageMultiplier*100-100).toFixed(0)}%(${origLev}->${dynLeverage}x) [${intelFactors.sentiment}]`);
         }
         const minCost = 5;
 
         const positionValue = contracts * price;
         const neededMarginValue = positionValue / dynLeverage;
         if (positionValue < minCost) {
-          console.log(`[Strategy] ⏸ ${symbol}: 头寸价值${positionValue.toFixed(2)} < 最小${minCost}, 跳过`);
+          console.log(`[Strategy] ⏸ ${key}: 头寸价值${positionValue.toFixed(2)} < 最小${minCost}, 跳过`);
           continue;
         }
         if (neededMarginValue > cappedCap) {
-          console.log(`[Strategy] ⏸ ${symbol}: 需保证金$${neededMarginValue.toFixed(2)} > 可用$${cappedCap.toFixed(2)}, 跳过`);
+          console.log(`[Strategy] ⏸ ${key}: 需保证金$${neededMarginValue.toFixed(2)} > 可用$${cappedCap.toFixed(2)}, 跳过`);
           continue;
         }
 
         // ====== 开仓决策清单（交易员视角） ======
-        console.log(`[Trader] 📋 ===== 开仓决策清单 ${symbol} =====`);
+        console.log(`[Trader] 📋 ===== 开仓决策清单 ${key} =====`);
         console.log(`[Trader] 📊 信号: ${combined.direction} (趋势${trendSignal.confidence}%+均值${meanRevSignal.confidence}%)`);
         console.log(`[Trader] 📊 市场状态: ${marketRegime} ${regimeConfirmed ? '✅已确认' : '⏳待确认'}`);
         console.log(`[Trader] 📊 风控: ${riskStatus.dailyPnlPercent.toFixed(1)}% ${riskStatus.canTrade ? '✅通过' : '⛔拦截'}`);
@@ -704,21 +711,21 @@ const closeResult = await cexEngine.closePosition(symbol, posSide, getExchangeId
         console.log(`[Trader] 📊 仓位价值: $${positionValue.toFixed(2)} | 保证金: $${neededMarginValue.toFixed(2)}`);
         console.log(`[Trader] 📊 情报调整: 仓位${((intelFactors?.positionMultiplier||1)*100-100).toFixed(0) > 0 ? '+' : ''}${((intelFactors?.positionMultiplier||1)*100-100).toFixed(0)}% | 杠杆${((intelFactors?.leverageMultiplier||1)*100-100).toFixed(0) > 0 ? '+' : ''}${((intelFactors?.leverageMultiplier||1)*100-100).toFixed(0)}%`);
         console.log(`[Trader] 📊 ATD策略: ${adaptivePos.reason}`);
-        console.log(`[Trader] 📊 高级别趋势: ${getHigherTFtrend ? getHigherTFtrend(symbol) : 'N/A'}`);
-        console.log(`[Trader] 🚀 执行开仓: ${symbol} ${side} ${contracts}张 @${dynLeverage}x`);
+        console.log(`[Trader] 📊 高级别趋势: ${getHigherTFtrend ? getHigherTFtrend(symbol, exchangeId) : 'N/A'}`);
+        console.log(`[Trader] 🚀 执行开仓: ${key} ${side} ${contracts}张 @${dynLeverage}x`);
 
-        console.log(`[Strategy] 🚀 ${symbol}: 开${side}仓 ${contracts} (${positionValue.toFixed(2)}U @ ${styleName}) ${adaptivePos.reason}`);
-        const result = await cexEngine.openPosition(symbol, side, contracts, getExchangeId(symbol), {
+        console.log(`[Strategy] 🚀 ${key}: 开${side}仓 ${contracts} (${positionValue.toFixed(2)}U @ ${styleName}) ${adaptivePos.reason}`);
+        const result = await cexEngine.openPosition(symbol, side, contracts, exchangeId, {
           marginMode: 'isolated',
         });
 
         if (result.success) {
-          autoOpenedPositions.add(symbol);
+          autoOpenedPositions.add(key);
           try { await riskManager.onPositionOpened(symbol, side, result.margin || (contracts * price / dynLeverage)); } catch(e) { console.log('[Strategy] ⚠️ onPositionOpened异常:', e.message); }
-          appendCexLog('auto_open', `[${cexEngine.getExchangeLabel(getExchangeId(symbol))}] 策略开${side === 'long' ? '多' : '空'} ${symbol} ${contracts}张 ${posCalc.leverage||'?'}x @ ${result.entryPrice || '?'}`);
+          appendCexLog('auto_open', `[${cexEngine.getExchangeLabel(exchangeId)}] 策略开${side === 'long' ? '多' : '空'} ${symbol} ${contracts}张 ${posCalc.leverage||'?'}x @ ${result.entryPrice || '?'}`);
           positionHistory.push({
             timestamp: result.timestamp,
-            symbol,
+            symbol: key,
             action: `open_${side}`,
             contracts,
             entryPrice: result.entryPrice,
@@ -728,37 +735,39 @@ const closeResult = await cexEngine.closePosition(symbol, posSide, getExchangeId
             style: styleName,
             confidence: combined.confidence,
           });
-          if (signalFlipCount[symbol]) {
-            signalFlipCount[symbol].long = 0;
-            signalFlipCount[symbol].short = 0;
+          if (signalFlipCount[key]) {
+            signalFlipCount[key].long = 0;
+            signalFlipCount[key].short = 0;
           }
         } else {
-          appendCexLog('auto_open_fail', `[${cexEngine.getExchangeLabel(getExchangeId(symbol))}] 策略开仓失败 ${symbol}: ${result.error}`);
+          appendCexLog('auto_open_fail', `[${cexEngine.getExchangeLabel(exchangeId)}] 策略开仓失败 ${symbol}: ${result.error}`);
           console.log(`[Strategy] ❌ 开仓失败: ${result.error}`);
         }
       }
 
     } catch (err) {
-      console.error(`[Strategy] ⚠️ ${symbol} 评估异常: ${err.message}\n${err.stack}`);
+      console.error(`[Strategy] ⚠️ ${key} 评估异常: ${err.message}\n${err.stack}`);
+    }
     }
   }
   isEvaluating = false;
 }
 
+
 // ============ 价格监控（盘中调整止盈止损） ============
 
 // ============ 追踪止盈状态 ============
-// { 'ETH/USDT:USDT': { slPrice: 2200, tpPrice: 2600, trailActivated: false, bestStop: 0 } }
+// { 'ETH/USDT:USDT::binance': { slPrice: 2200, tpPrice: 2600, trailActivated: false, bestStop: 0 } }
 let trailingState = {};
 
 // 市场状态确认队列 — 连续3次相同才确认状态切换，过滤假信号
-let regimeQueues = {}; // { 'BTC/USDT:USDT': ['trending','trending','ranging'] }
+let regimeQueues = {}; // { 'BTC/USDT:USDT::binance': ['trending','trending','ranging'] }
 
-// 止损冷却期（每个币种止损后N分钟内不开新仓）
+// 止损冷却期（每个symbol::exchange止损后N分钟内不开新仓）
 const STOP_LOSS_COOLDOWN_MS = 15 * 60 * 1000; // 15分钟
 let lastStopLossTime = {};
 /** Signal flip buffer - requires 2 consecutive flips to close */
-let signalFlipCount = {}; // { 'BTC/USDT:USDT': timestamp }
+let signalFlipCount = {}; // { 'BTC/USDT:USDT::binance': timestamp }
 
 /**
  * 追踪止盈执行 — 每30秒检查一次，逐步锁定利润
@@ -776,8 +785,8 @@ async function checkPositions() {
   await riskManager.riskCheck();
 
   try {
-    // 多交易所：从所有配置的交易所获取持仓
-    const allExchanges = [...new Set(activeSymbols.map(s => getExchangeId(s)))];
+    // 多交易所：从 exchangeSymbols 获取所有配置的交易所
+    const allExchanges = Object.keys(exchangeSymbols);
     let positions = [];
     for (const exId of allExchanges) {
       try {
@@ -793,19 +802,32 @@ async function checkPositions() {
       if (!pos.entryPrice || !pos.markPrice) continue;
 
       const symbol = pos.symbol;
+      // 确定该持仓所属交易所（从pos中推断，或从exchangeSymbols查找）
+      let exchangeId = pos.exchange || null;
+      if (!exchangeId) {
+        // 尝试从exchangeSymbols推断：查找包含该symbol的交易所
+        for (const [ex, syms] of Object.entries(exchangeSymbols)) {
+          if (syms.includes(symbol) || syms.some(s => s === symbol || s === symbol + ':USDT' || symbol === s + ':USDT')) {
+            exchangeId = ex;
+            break;
+          }
+        }
+        if (!exchangeId) exchangeId = getExchangeId(symbol);
+      }
+      const key = symbol + '::' + exchangeId;
       const pnlPercent = pos.percentage || 0;
       const contracts = Math.abs(pos.contracts || 0);
       const style = cexEngine.getCurrentStyle();
       const styleCfg = style.config;
       const isLong = pos.side === 'long';
 
-      trackedSymbols.add(symbol);
+      trackedSymbols.add(key);
 
       // 自动恢复追踪状态：服务重启后 autoOpenedPositions 为空，
       // 通过检查交易所上是否有算法单来判断是否自动仓
-      if (!autoOpenedPositions.has(symbol)) {
+      if (!autoOpenedPositions.has(key)) {
         try {
-          const existingOrders = await cexEngine.restGetOpenOrders(symbol, getExchangeId(symbol));
+          const existingOrders = await cexEngine.restGetOpenOrders(symbol, exchangeId);
           if (existingOrders.success && existingOrders.orders && existingOrders.orders.length > 0) {
             const closeSide = pos.side === 'long' ? 'sell' : 'buy';
             const hasAlgo = existingOrders.orders.some(o =>
@@ -813,24 +835,24 @@ async function checkPositions() {
               (o.type === 'STOP' || o.type === 'TAKE_PROFIT')
             );
             if (hasAlgo) {
-              console.log(`[Trail] 🔄 ${symbol}: 恢复自动仓(检测到算法单)`);
-              autoOpenedPositions.add(symbol);
+              console.log(`[Trail] 🔄 ${key}: 恢复自动仓(检测到算法单)`);
+              autoOpenedPositions.add(key);
             } else {
-              console.log(`[Trail] ⏭ ${symbol}: 无匹配算法单，视为手动仓跳过`);
+              console.log(`[Trail] ⏭ ${key}: 无匹配算法单，视为手动仓跳过`);
               continue;
             }
           } else {
-            console.log(`[Trail] ⏭ ${symbol}: 无算法单(空或查询失败)，视为手动仓跳过`);
+            console.log(`[Trail] ⏭ ${key}: 无算法单(空或查询失败)，视为手动仓跳过`);
             continue;
           }
         } catch (e) {
-          console.log(`[Trail] ⏭ ${symbol}: 算法单检查异常(${e.message})，视为手动仓跳过`);
+          console.log(`[Trail] ⏭ ${key}: 算法单检查异常(${e.message})，视为手动仓跳过`);
           continue;
         }
       }
 
       // 初始化追踪状态（如果没有的话）
-      if (!trailingState[symbol]) {
+      if (!trailingState[key]) {
         // ====== ATR 动态止盈止损（自适应） ======
         let atr = { atr: 0, atrPercent: 1 };
         let marketRegime = 'unknown';
@@ -874,7 +896,7 @@ async function checkPositions() {
           ? pos.entryPrice * (1 + styleCfg.takeProfitPercent / 100 * partialTpRatio)
           : pos.entryPrice * (1 - styleCfg.takeProfitPercent / 100 * partialTpRatio);
 
-        trailingState[symbol] = {
+        trailingState[key] = {
           slPrice: parseFloat(slPrice.toFixed(2)),
           tpPrice: parseFloat(tpPrice.toFixed(2)),
           partialTpPrice: parseFloat(partialTpPrice.toFixed(2)),
@@ -894,11 +916,11 @@ async function checkPositions() {
           entryPrice: pos.entryPrice,
           side: pos.side,
         };
-        console.log(`[Trail] 📋 ${symbol}: ${stopType === 'atr' ? 'ATR' : '固定'}止损 $${slPrice.toFixed(2)}, 止盈 $${tpPrice.toFixed(2)} (${marketRegime}, ATR:${atr.atrPercent.toFixed(1)}%)`);
+        console.log(`[Trail] 📋 ${key}: ${stopType === 'atr' ? 'ATR' : '固定'}止损 $${slPrice.toFixed(2)}, 止盈 $${tpPrice.toFixed(2)} (${marketRegime}, ATR:${atr.atrPercent.toFixed(1)}%)`);
         // 🔧 修复：检查交易所上是否真的有对应的SL/TP条件单，缺失则补建
         // openPosition() 创建可能因精度错误失败，或服务重启后条件单已消失
         try {
-          const existingOrders = await cexEngine.restGetOpenOrders(symbol, getExchangeId(symbol));
+          const existingOrders = await cexEngine.restGetOpenOrders(symbol, exchangeId);
           let hasAlgoSl = false, hasAlgoTp = false;
           const closeSide = pos.side === 'long' ? 'sell' : 'buy';
           if (existingOrders.success) {
@@ -909,8 +931,7 @@ async function checkPositions() {
             }
           }
           if (!hasAlgoSl) {
-            console.log(`[Trail] 🔧 ${symbol}: 缺止损单，补建 $${slPrice.toFixed(2)}`);
-            const exchangeId = getExchangeId(symbol);
+            console.log(`[Trail] 🔧 ${key}: 缺止损单，补建 $${slPrice.toFixed(2)}`);
             const posSide = pos.side === 'long' ? 'LONG' : 'SHORT';
             const r = await cexEngine.createConditionalOrder(exchangeId, symbol, closeSide, 'STOP', contracts, slPrice, {
               price: slPrice, reduceOnly: true, workingType: 'MARK_PRICE', positionSide: posSide,
@@ -918,12 +939,11 @@ async function checkPositions() {
             if (r.success) {
               appendCexLog('algo_create', `[${cexEngine.getExchangeLabel(exchangeId)}] 补建止损 ${symbol} $${slPrice}`, { type: 'STOP', price: slPrice });
             } else {
-              console.log(`[Trail] ⚠️ ${symbol}: 止损补建失败: ${r.error}`);
+              console.log(`[Trail] ⚠️ ${key}: 止损补建失败: ${r.error}`);
             }
           }
           if (!hasAlgoTp) {
-            console.log(`[Trail] 🔧 ${symbol}: 缺止盈单，补建 $${tpPrice.toFixed(2)}`);
-            const exchangeId = getExchangeId(symbol);
+            console.log(`[Trail] 🔧 ${key}: 缺止盈单，补建 $${tpPrice.toFixed(2)}`);
             const posSide = pos.side === 'long' ? 'LONG' : 'SHORT';
             const r = await cexEngine.createConditionalOrder(exchangeId, symbol, closeSide, 'TAKE_PROFIT', contracts, tpPrice, {
               price: tpPrice, reduceOnly: true, workingType: 'MARK_PRICE', positionSide: posSide,
@@ -931,15 +951,15 @@ async function checkPositions() {
             if (r.success) {
               appendCexLog('algo_create', `[${cexEngine.getExchangeLabel(exchangeId)}] 补建止盈 ${symbol} $${tpPrice}`, { type: 'TAKE_PROFIT', price: tpPrice });
             } else {
-              console.log(`[Trail] ⚠️ ${symbol}: 止盈补建失败: ${r.error}`);
+              console.log(`[Trail] ⚠️ ${key}: 止盈补建失败: ${r.error}`);
             }
           }
         } catch (e) {
-          console.log(`[Trail] ⚠️ ${symbol}: 补建检查异常: ${e.message}`);
+          console.log(`[Trail] ⚠️ ${key}: 补建检查异常: ${e.message}`);
         }
       }
 
-      const state = trailingState[symbol];
+      const state = trailingState[key];
 
       // ====== 阶段一：检查是否达到追踪触发点（ATR自适应） ======
       const styleTrigger = state.trailActivatePercent || styleCfg.trailActivatePercent;
@@ -973,17 +993,17 @@ async function checkPositions() {
           : Math.min(newTrailStop, hardFloor);
         const boundedTrailStop = parseFloat(boundedStop.toFixed(2));
         if (boundedTrailStop !== newTrailStop) {
-          console.log(`[Trail] 🛡️ ${symbol}: 追踪止损触碰硬底保护 $${newTrailStop.toFixed(2)}→$${boundedTrailStop.toFixed(2)} (floor:$${hardFloor.toFixed(2)}) — 强制平仓!`);
+          console.log(`[Trail] 🛡️ ${key}: 追踪止损触碰硬底保护 $${newTrailStop.toFixed(2)}→$${boundedTrailStop.toFixed(2)} (floor:$${hardFloor.toFixed(2)}) — 强制平仓!`);
           try {
-            const closeResult = await cexEngine.closePosition(symbol, pos.side, getExchangeId(symbol));
+            const closeResult = await cexEngine.closePosition(symbol, pos.side, exchangeId);
             if (closeResult.success) {
-              console.log(`[Trail] 🛑 ${symbol}: 硬底保护触发强制平仓成功 PnL:$${closeResult.realizedPnl}`);
-              if (closeResult.pnlPercent !== undefined) adaptive.recordReturn(symbol, closeResult.pnlPercent);
+              console.log(`[Trail] 🛑 ${key}: 硬底保护触发强制平仓成功 PnL:$${closeResult.realizedPnl}`);
+              if (closeResult.pnlPercent !== undefined) adaptive.recordReturn(key, closeResult.pnlPercent);
               // [v2.0修复] 记录凯利数据
               if (closeResult.pnlPercent !== undefined) {
-                try { adaptive.recordTrade({ timestamp: Date.now(), symbol, side: pos.side, entryPrice: pos.entryPrice, exitPrice: closeResult.closePrice, contracts, pnl: closeResult.realizedPnl, pnlPercent: closeResult.pnlPercent, reason: '硬底保护强平', style: style.style, marketRegime: state.marketRegime, confidence: 50 }); } catch(e) {}
+                try { adaptive.recordTrade({ timestamp: Date.now(), symbol: key, side: pos.side, entryPrice: pos.entryPrice, exitPrice: closeResult.closePrice, contracts, pnl: closeResult.realizedPnl, pnlPercent: closeResult.pnlPercent, reason: '硬底保护强平', style: style.style, marketRegime: state.marketRegime, confidence: 50 }); } catch(e) {}
               }
-              appendCexLog('strategy_close', `[${cexEngine.getExchangeLabel(getExchangeId(symbol))}] 硬底保护强平 ${symbol} ${contracts.toString().padEnd(6)}张 PnL:${closeResult.realizedPnl>0?'+':''}$${closeResult.realizedPnl?.toFixed(2)||'?'} (${closeResult.pnlPercent>0?'+':''}${closeResult.pnlPercent?.toFixed(2)||'?'}%)`, { type: 'hard_floor_forced', realizedPnl: closeResult.realizedPnl, closePrice: closeResult.closePrice, pnlPercent: closeResult.pnlPercent, contracts });
+              appendCexLog('strategy_close', `[${cexEngine.getExchangeLabel(exchangeId)}] 硬底保护强平 ${symbol} ${contracts.toString().padEnd(6)}张 PnL:${closeResult.realizedPnl>0?'+':''}$${closeResult.realizedPnl?.toFixed(2)||'?'} (${closeResult.pnlPercent>0?'+':''}${closeResult.pnlPercent?.toFixed(2)||'?'}%)`, { type: 'hard_floor_forced', realizedPnl: closeResult.realizedPnl, closePrice: closeResult.closePrice, pnlPercent: closeResult.pnlPercent, contracts });
             } else {
               console.log(`[Trail] ❌ ${symbol}: 硬底保护强制平仓失败: ${closeResult.error}`);
             }
@@ -1034,7 +1054,7 @@ async function checkPositions() {
           // 获取当前Algo条件单ID（可能有重复，全部收集）
           let algoSlIds = [], algoTpIds = [];
           try {
-            const openResult = await cexEngine.restGetOpenOrders(symbol, getExchangeId(symbol));
+            const openResult = await cexEngine.restGetOpenOrders(symbol, exchangeId);
             if (openResult.success) {
               for (const o of openResult.orders) {
                 if (o.algoType !== 'CONDITIONAL' || o.side.toLowerCase() !== closeSideForOrder) continue;
@@ -1047,20 +1067,19 @@ async function checkPositions() {
           // 更新止损Algo单（取消所有旧止损单，再创建新单）
           if (newSL) {
             if (algoSlIds.length > 0) {
-              appendCexLog('algo_cleanup', `[${cexEngine.getExchangeLabel(getExchangeId(symbol))}] 追踪止损清理 ${symbol} ${algoSlIds.length}个旧止损单`, { count: algoSlIds.length });
+              appendCexLog('algo_cleanup', `[${cexEngine.getExchangeLabel(exchangeId)}] 追踪止损清理 ${symbol} ${algoSlIds.length}个旧止损单`, { count: algoSlIds.length });
             }
             for (const id of algoSlIds) {
-              try { await cexEngine.restCancelAlgoOrder(symbol, id, getExchangeId(symbol)); } catch (e) { /* 可能已成交 */ }
+              try { await cexEngine.restCancelAlgoOrder(symbol, id, exchangeId); } catch (e) { /* 可能已成交 */ }
             }
             try {
-              const exchangeId = getExchangeId(symbol);
               const posSide = isLong ? 'LONG' : 'SHORT';
               const result = await cexEngine.createConditionalOrder(exchangeId, symbol, closeSideForOrder, 'STOP', contractsForOrder, newSL, {
                 price: newSL, reduceOnly: true, workingType: 'MARK_PRICE', positionSide: posSide,
               });
               if (result.success) {
                 const lockedPercent = trailStepPercent || styleCfg.trailStepPercent;
-                appendCexLog('algo_update', `[${cexEngine.getExchangeLabel(getExchangeId(symbol))}] 追踪止损更新 ${symbol} $${state.slPrice.toFixed(2)}→$${newSL.toFixed(2)}`, { price: newSL });
+                appendCexLog('algo_update', `[${cexEngine.getExchangeLabel(exchangeId)}] 追踪止损更新 ${symbol} $${state.slPrice.toFixed(2)}→$${newSL.toFixed(2)}`, { price: newSL });
                 console.log(`[Trail] 🔒 ${symbol}: 止损 $${state.slPrice.toFixed(2)}→$${newSL.toFixed(2)} (锁定 ${(pnlPercent - lockedPercent).toFixed(1)}%+)`);
                 state.slPrice = newSL;
               }
@@ -1070,19 +1089,18 @@ async function checkPositions() {
           // 更新止盈Algo单（取消所有旧止盈单，再创建新单）
           if (newTP2) {
             if (algoTpIds.length > 0) {
-              appendCexLog('algo_cleanup', `[${cexEngine.getExchangeLabel(getExchangeId(symbol))}] 追踪止盈清理 ${symbol} ${algoTpIds.length}个旧止盈单`, { count: algoTpIds.length });
+              appendCexLog('algo_cleanup', `[${cexEngine.getExchangeLabel(exchangeId)}] 追踪止盈清理 ${symbol} ${algoTpIds.length}个旧止盈单`, { count: algoTpIds.length });
             }
             for (const id of algoTpIds) {
-              try { await cexEngine.restCancelAlgoOrder(symbol, id, getExchangeId(symbol)); } catch (e) { /* 可能已成交 */ }
+              try { await cexEngine.restCancelAlgoOrder(symbol, id, exchangeId); } catch (e) { /* 可能已成交 */ }
             }
             try {
-              const exchangeId = getExchangeId(symbol);
               const posSide = isLong ? 'LONG' : 'SHORT';
               const result = await cexEngine.createConditionalOrder(exchangeId, symbol, closeSideForOrder, 'TAKE_PROFIT', contractsForOrder, newTP2, {
                 price: newTP2, reduceOnly: true, workingType: 'MARK_PRICE', positionSide: posSide,
               });
               if (result.success) {
-                appendCexLog('algo_update', `[${cexEngine.getExchangeLabel(getExchangeId(symbol))}] 追踪止盈更新 ${symbol} $${state.tpPrice.toFixed(2)}→$${newTP2.toFixed(2)}`, { price: newTP2 });
+                appendCexLog('algo_update', `[${cexEngine.getExchangeLabel(exchangeId)}] 追踪止盈更新 ${symbol} $${state.tpPrice.toFixed(2)}→$${newTP2.toFixed(2)}`, { price: newTP2 });
                 console.log(`[Trail] 🎯 ${symbol}: 止盈 $${state.tpPrice.toFixed(2)}→$${newTP2.toFixed(2)}`);
                 state.tpPrice = newTP2;
               }
@@ -1103,22 +1121,22 @@ async function checkPositions() {
         const partialHit = isLong ? currentPrice >= state.partialTpPrice : currentPrice <= state.partialTpPrice;
         if (partialHit) {
           console.log(`[Trail] ✂️ ${symbol}: 触发分段止盈! 现价 $${currentPrice.toFixed(2)}, 平50%仓位`);
-          const closeResult = await cexEngine.closePosition(symbol, pos.side, getExchangeId(symbol), { percent: 50 });
+          const closeResult = await cexEngine.closePosition(symbol, pos.side, exchangeId, { percent: 50 });
           if (closeResult.success) {
             state.partialTpTriggered = true;
             // 已平50%，取消旧Algo单，剩余仓位SL移到成本价
             let _partialCleaned = 0;
             try {
-              const openOrders = await cexEngine.restGetOpenOrders(symbol, getExchangeId(symbol));
+              const openOrders = await cexEngine.restGetOpenOrders(symbol, exchangeId);
               if (openOrders.success) {
                 for (const o of openOrders.orders) {
                   if (o.algoType === 'CONDITIONAL' && o.side.toLowerCase() === (isLong ? 'sell' : 'buy')) {
-                    await cexEngine.restCancelAlgoOrder(symbol, o.orderId, getExchangeId(symbol)).catch(() => {});
+                    await cexEngine.restCancelAlgoOrder(symbol, o.orderId, exchangeId).catch(() => {});
                     _partialCleaned++;
                   }
                 }
                 if (_partialCleaned > 0) {
-                  appendCexLog('algo_cleanup', `[${cexEngine.getExchangeLabel(getExchangeId(symbol))}] 分段止盈清理 ${symbol} ${_partialCleaned}个旧条件单`, { count: _partialCleaned });
+                  appendCexLog('algo_cleanup', `[${cexEngine.getExchangeLabel(exchangeId)}] 分段止盈清理 ${symbol} ${_partialCleaned}个旧条件单`, { count: _partialCleaned });
                 }
               }
             } catch(e) {
@@ -1129,7 +1147,6 @@ async function checkPositions() {
             const closeSide = pos.side === 'long' ? 'sell' : 'buy';
             const entrySl = isLong ? pos.entryPrice * 0.995 : pos.entryPrice * 1.005;
             try {
-              const exchangeId = getExchangeId(symbol);
               const posSide = isLong ? 'LONG' : 'SHORT';
               await cexEngine.createConditionalOrder(exchangeId, symbol, closeSide, 'STOP', reducedContracts, parseFloat(entrySl.toFixed(2)), {
                 price: parseFloat(entrySl.toFixed(2)), reduceOnly: true, workingType: 'MARK_PRICE', positionSide: posSide,
@@ -1139,7 +1156,7 @@ async function checkPositions() {
             state.slPrice = parseFloat(entrySl.toFixed(2));
             state.bestStop = parseFloat(entrySl.toFixed(2));
             state.trailActivated = true; // 强制激活追踪
-            appendCexLog('auto_close', `[${cexEngine.getExchangeLabel(getExchangeId(symbol))}] 分段止盈50% ${symbol} ${(contracts * 0.5).toString().padEnd(6)}张 @${closeResult.closePrice || currentPrice.toFixed(2)} PnL:${closeResult.realizedPnl>0?'+':''}$${closeResult.realizedPnl?.toFixed(2)||'?'} (${closeResult.pnlPercent>0?'+':''}${closeResult.pnlPercent?.toFixed(2)||'?'}%)`, {
+            appendCexLog('auto_close', `[${cexEngine.getExchangeLabel(exchangeId)}] 分段止盈50% ${symbol} ${(contracts * 0.5).toString().padEnd(6)}张 @${closeResult.closePrice || currentPrice.toFixed(2)} PnL:${closeResult.realizedPnl>0?'+':''}$${closeResult.realizedPnl?.toFixed(2)||'?'} (${closeResult.pnlPercent>0?'+':''}${closeResult.pnlPercent?.toFixed(2)||'?'}%)`, {
               realizedPnl: closeResult.realizedPnl,
               pnlPercent: closeResult.pnlPercent,
               triggerType: 'partial_take_profit',
@@ -1176,18 +1193,17 @@ async function checkPositions() {
           console.log(`[Trail] 🔒 ${symbol}: 利润${(currentPnLPercent*100).toFixed(1)}%≥0.5%, SL上移至保本 $${newBreakevenSl}`);
           // 取消旧止损单，建新保本单
           try {
-            const openOrders = await cexEngine.restGetOpenOrders(symbol, getExchangeId(symbol));
+            const openOrders = await cexEngine.restGetOpenOrders(symbol, exchangeId);
             if (openOrders.success) {
               for (const o of openOrders.orders) {
                 if (o.algoType === 'CONDITIONAL' && o.type === 'STOP' && o.side.toLowerCase() === (isLong ? 'sell' : 'buy')) {
-                  await cexEngine.restCancelAlgoOrder(symbol, o.orderId, getExchangeId(symbol)).catch(() => {});
+                  await cexEngine.restCancelAlgoOrder(symbol, o.orderId, exchangeId).catch(() => {});
                 }
               }
             }
           } catch(e) { /* 忽略 */ }
           const closeSide = pos.side === 'long' ? 'sell' : 'buy';
           try {
-            const exchangeId = getExchangeId(symbol);
             const posSide = isLong ? 'LONG' : 'SHORT';
             await cexEngine.createConditionalOrder(exchangeId, symbol, closeSide, 'STOP', Math.abs(pos.contracts), newBreakevenSl, {
               price: newBreakevenSl, reduceOnly: true, workingType: 'MARK_PRICE', positionSide: posSide,
@@ -1199,7 +1215,7 @@ async function checkPositions() {
           state.bestStop = newBreakevenSl;
           // 移除旧的 TP 条件单，恢复让利润奔跑（分段止盈已完成使命）
           // 不取消TP，让TP作为兜底保护
-          appendCexLog('strategy_close', `[${cexEngine.getExchangeLabel(getExchangeId(symbol))}] 保本保护 ${symbol} SL上移 $${newBreakevenSl} (利润${(currentPnLPercent*100).toFixed(1)}%)`, {
+          appendCexLog('strategy_close', `[${cexEngine.getExchangeLabel(exchangeId)}] 保本保护 ${symbol} SL上移 $${newBreakevenSl} (利润${(currentPnLPercent*100).toFixed(1)}%)`, {
             triggerType: 'breakeven_protection',
             breakevenSl: newBreakevenSl,
             pnlPercent: currentPnLPercent,
@@ -1226,18 +1242,17 @@ async function checkPositions() {
             console.log(`[Trail] 🎯 ${symbol}: 追踪止盈上移 SL→$${newTrailSl} (锁利${(trailLock*100).toFixed(1)}%)`);
             // 更新链上止损单
             try {
-              const openOrders = await cexEngine.restGetOpenOrders(symbol, getExchangeId(symbol));
+              const openOrders = await cexEngine.restGetOpenOrders(symbol, exchangeId);
               if (openOrders.success) {
                 for (const o of openOrders.orders) {
                   if (o.algoType === 'CONDITIONAL' && o.type === 'STOP' && o.side.toLowerCase() === (isLong ? 'sell' : 'buy')) {
-                    await cexEngine.restCancelAlgoOrder(symbol, o.orderId, getExchangeId(symbol)).catch(() => {});
+                    await cexEngine.restCancelAlgoOrder(symbol, o.orderId, exchangeId).catch(() => {});
                   }
                 }
               }
             } catch(e) { /* 忽略 */ }
             const closeSide = pos.side === 'long' ? 'sell' : 'buy';
             try {
-              const exchangeId = getExchangeId(symbol);
               const posSide = isLong ? 'LONG' : 'SHORT';
               await cexEngine.createConditionalOrder(exchangeId, symbol, closeSide, 'STOP', Math.abs(pos.contracts), newTrailSl, {
                 price: newTrailSl, reduceOnly: true, workingType: 'MARK_PRICE', positionSide: posSide,
@@ -1245,7 +1260,7 @@ async function checkPositions() {
             } catch(e) {
               console.log(`[Trail] ⚠️ ${symbol}: 追踪SL创建失败: ${e.message}`);
             }
-            appendCexLog('strategy_close', `[${cexEngine.getExchangeLabel(getExchangeId(symbol))}] 追踪止盈 ${symbol} SL上移 $${newTrailSl} (利润${(currentPnLPercent*100).toFixed(1)}%)`, {
+            appendCexLog('strategy_close', `[${cexEngine.getExchangeLabel(exchangeId)}] 追踪止盈 ${symbol} SL上移 $${newTrailSl} (利润${(currentPnLPercent*100).toFixed(1)}%)`, {
               triggerType: 'trailing_stop',
               slPrice: newTrailSl,
               pnlPercent: currentPnLPercent,
@@ -1258,14 +1273,14 @@ async function checkPositions() {
         if (currentPnLPercent < GTFO_RETRACE && state.maxPnlPercent >= 0.008) {
           console.log(`[Trail] 🛑 ${symbol}: GTFO保护触发（利润从${(state.maxPnlPercent*100).toFixed(1)}%回吐至${(currentPnLPercent*100).toFixed(1)}%）`);
           try {
-            const closeResult = await cexEngine.closePosition(symbol, pos.side, getExchangeId(symbol));
+            const closeResult = await cexEngine.closePosition(symbol, pos.side, exchangeId);
             if (closeResult.success) {
-              if (closeResult.pnlPercent !== undefined) adaptive.recordReturn(symbol, closeResult.pnlPercent);
+              if (closeResult.pnlPercent !== undefined) adaptive.recordReturn(key, closeResult.pnlPercent);
               if (closeResult.pnlPercent !== undefined) {
-                try { adaptive.recordTrade({ timestamp: Date.now(), symbol, side: pos.side, entryPrice: pos.entryPrice, exitPrice: closeResult.closePrice, contracts, pnl: closeResult.realizedPnl, pnlPercent: closeResult.pnlPercent, reason: 'GTFO保护', style: style.style, marketRegime: state.marketRegime, confidence: 50 }); } catch(e) {}
+                try { adaptive.recordTrade({ timestamp: Date.now(), symbol: key, side: pos.side, entryPrice: pos.entryPrice, exitPrice: closeResult.closePrice, contracts, pnl: closeResult.realizedPnl, pnlPercent: closeResult.pnlPercent, reason: 'GTFO保护', style: style.style, marketRegime: state.marketRegime, confidence: 50 }); } catch(e) {}
               }
-              await riskManager.onPositionClosed(symbol, pos.side, closeResult.realizedPnl, closeResult.pnlPercent, getExchangeId(symbol));
-              appendCexLog('strategy_close', '[' + cexEngine.getExchangeLabel(getExchangeId(symbol)) + '] GTFO保护平' + (pos.side === 'long' ? '多' : '空') + ' ' + symbol + ' ' + contracts.toString().padEnd(6) + '张 @' + closeResult.closePrice + ' PnL:' + (closeResult.realizedPnl>0?'+':'') + '$' + (closeResult.realizedPnl?.toFixed(2)||'?') + ' (' + (closeResult.pnlPercent>0?'+':'') + (closeResult.pnlPercent?.toFixed(2)||'?') + '%)', {
+              await riskManager.onPositionClosed(symbol, pos.side, closeResult.realizedPnl, closeResult.pnlPercent, exchangeId);
+              appendCexLog('strategy_close', '[' + cexEngine.getExchangeLabel(exchangeId) + '] GTFO保护平' + (pos.side === 'long' ? '多' : '空') + ' ' + symbol + ' ' + contracts.toString().padEnd(6) + '张 @' + closeResult.closePrice + ' PnL:' + (closeResult.realizedPnl>0?'+':'') + '$' + (closeResult.realizedPnl?.toFixed(2)||'?') + ' (' + (closeResult.pnlPercent>0?'+':'') + (closeResult.pnlPercent?.toFixed(2)||'?') + '%)', {
                 realizedPnl: closeResult.realizedPnl,
                 pnlPercent: closeResult.pnlPercent,
                 triggerType: 'gtfo_protection',
@@ -1287,15 +1302,15 @@ async function checkPositions() {
           console.log(`[Trail] 🛑 ${symbol}: 触发止损! 现价 $${currentPrice.toFixed(2)} ≤ 止损 $${state.slPrice.toFixed(2)}`);
           lastStopLossTime[symbol] = Date.now();
           console.log(`[Trail] ⏳ ${symbol}: 止损冷却 ${STOP_LOSS_COOLDOWN_MS/60000}分钟`);
-          const closeResult = await cexEngine.closePosition(symbol, pos.side, getExchangeId(symbol));
+          const closeResult = await cexEngine.closePosition(symbol, pos.side, exchangeId);
           if (closeResult.success && closeResult.realizedPnl !== undefined) {
-            if (closeResult.pnlPercent !== undefined) adaptive.recordReturn(symbol, closeResult.pnlPercent);
+            if (closeResult.pnlPercent !== undefined) adaptive.recordReturn(key, closeResult.pnlPercent);
             // [v2.0修复] 记录凯利数据
             if (closeResult.pnlPercent !== undefined) {
-              try { adaptive.recordTrade({ timestamp: Date.now(), symbol, side: pos.side, entryPrice: pos.entryPrice, exitPrice: closeResult.closePrice, contracts, pnl: closeResult.realizedPnl, pnlPercent: closeResult.pnlPercent, reason: '止损', style: style.style, marketRegime, confidence: 50 }); } catch(e) {}
+              try { adaptive.recordTrade({ timestamp: Date.now(), symbol: key, side: pos.side, entryPrice: pos.entryPrice, exitPrice: closeResult.closePrice, contracts, pnl: closeResult.realizedPnl, pnlPercent: closeResult.pnlPercent, reason: '止损', style: style.style, marketRegime, confidence: 50 }); } catch(e) {}
             }
-            await riskManager.onPositionClosed(symbol, pos.side, closeResult.realizedPnl, closeResult.pnlPercent, getExchangeId(symbol));
-            appendCexLog('auto_close', `[${cexEngine.getExchangeLabel(getExchangeId(symbol))}] 止损平${pos.side === 'long' ? '多' : '空'} ${symbol} ${contracts.toString().padEnd(6)}张 @${closeResult.closePrice} PnL:${closeResult.realizedPnl>0?'+':''}$${closeResult.realizedPnl?.toFixed(2)||'?'} (${closeResult.pnlPercent>0?'+':''}${closeResult.pnlPercent?.toFixed(2)||'?'}%)`, {
+            await riskManager.onPositionClosed(symbol, pos.side, closeResult.realizedPnl, closeResult.pnlPercent, exchangeId);
+            appendCexLog('auto_close', `[${cexEngine.getExchangeLabel(exchangeId)}] 止损平${pos.side === 'long' ? '多' : '空'} ${symbol} ${contracts.toString().padEnd(6)}张 @${closeResult.closePrice} PnL:${closeResult.realizedPnl>0?'+':''}$${closeResult.realizedPnl?.toFixed(2)||'?'} (${closeResult.pnlPercent>0?'+':''}${closeResult.pnlPercent?.toFixed(2)||'?'}%)`, {
               realizedPnl: closeResult.realizedPnl,
               pnlPercent: closeResult.pnlPercent,
               triggerType: 'stop_loss',
@@ -1306,15 +1321,15 @@ async function checkPositions() {
         }
         if (state.tpPrice > 0 && currentPrice >= state.tpPrice) {
           console.log(`[Trail] ✅ ${symbol}: 触发止盈! 现价 $${currentPrice.toFixed(2)} ≥ 止盈 $${state.tpPrice.toFixed(2)}`);
-          const closeResult = await cexEngine.closePosition(symbol, pos.side, getExchangeId(symbol));
+          const closeResult = await cexEngine.closePosition(symbol, pos.side, exchangeId);
           if (closeResult.success && closeResult.realizedPnl !== undefined) {
-            if (closeResult.pnlPercent !== undefined) adaptive.recordReturn(symbol, closeResult.pnlPercent);
+            if (closeResult.pnlPercent !== undefined) adaptive.recordReturn(key, closeResult.pnlPercent);
             // [v2.0修复] 记录凯利数据
             if (closeResult.pnlPercent !== undefined) {
-              try { adaptive.recordTrade({ timestamp: Date.now(), symbol, side: pos.side, entryPrice: pos.entryPrice, exitPrice: closeResult.closePrice, contracts, pnl: closeResult.realizedPnl, pnlPercent: closeResult.pnlPercent, reason: '止盈', style: style.style, marketRegime, confidence: 50 }); } catch(e) {}
+              try { adaptive.recordTrade({ timestamp: Date.now(), symbol: key, side: pos.side, entryPrice: pos.entryPrice, exitPrice: closeResult.closePrice, contracts, pnl: closeResult.realizedPnl, pnlPercent: closeResult.pnlPercent, reason: '止盈', style: style.style, marketRegime, confidence: 50 }); } catch(e) {}
             }
-            await riskManager.onPositionClosed(symbol, pos.side, closeResult.realizedPnl, closeResult.pnlPercent, getExchangeId(symbol));
-            appendCexLog('auto_close', `[${cexEngine.getExchangeLabel(getExchangeId(symbol))}] 止盈平${pos.side === 'long' ? '多' : '空'} ${symbol} ${contracts.toString().padEnd(6)}张 @${closeResult.closePrice} PnL:${closeResult.realizedPnl>0?'+':''}$${closeResult.realizedPnl?.toFixed(2)||'?'} (${closeResult.pnlPercent>0?'+':''}${closeResult.pnlPercent?.toFixed(2)||'?'}%)`, {
+            await riskManager.onPositionClosed(symbol, pos.side, closeResult.realizedPnl, closeResult.pnlPercent, exchangeId);
+            appendCexLog('auto_close', `[${cexEngine.getExchangeLabel(exchangeId)}] 止盈平${pos.side === 'long' ? '多' : '空'} ${symbol} ${contracts.toString().padEnd(6)}张 @${closeResult.closePrice} PnL:${closeResult.realizedPnl>0?'+':''}$${closeResult.realizedPnl?.toFixed(2)||'?'} (${closeResult.pnlPercent>0?'+':''}${closeResult.pnlPercent?.toFixed(2)||'?'}%)`, {
               realizedPnl: closeResult.realizedPnl,
               pnlPercent: closeResult.pnlPercent,
               triggerType: 'take_profit',
@@ -1328,18 +1343,18 @@ async function checkPositions() {
               const inCooldown = (Date.now() - lastSl) < STOP_LOSS_COOLDOWN_MS;
               if (riskStatus.canTrade && state.marketRegime === 'trending' && !inCooldown) {
                 console.log(`[Trail] 🚀 ${symbol}: 趋势仍强(${state.marketRegime}),尝试重入`);
-                const evalSignal = currentSignals[symbol];
+                const evalSignal = currentSignals[key];
                 // 要求趋势评分 > 40（避免弱信号重复开仓）
                 if (evalSignal && evalSignal.trend && evalSignal.trend.direction === pos.side && (evalSignal.trend.confidence || 0) > 40) {
                   const reentryContracts = Math.abs(contracts * 0.5);
                   const minForSymbol = { 'ETH/USDT': 0.01, 'BTC/USDT:USDT': 0.001 }[symbol] || 0.001;
                   if (reentryContracts >= minForSymbol) {
-                    const result = await cexEngine.openPosition(symbol, pos.side, reentryContracts, getExchangeId(symbol), {
+                    const result = await cexEngine.openPosition(symbol, pos.side, reentryContracts, exchangeId, {
                       marginMode: 'isolated',
                     });
                     if (result.success) {
                       console.log(`[Trail] 🔄 ${symbol}: 趋势重入成功! ${reentryContracts}张`);
-                      appendCexLog('auto_close', `[${cexEngine.getExchangeLabel(getExchangeId(symbol))}] 趋势重入${pos.side === 'long' ? '多' : '空'} ${symbol} ${reentryContracts}张`, {
+                      appendCexLog('auto_close', `[${cexEngine.getExchangeLabel(exchangeId)}] 趋势重入${pos.side === 'long' ? '多' : '空'} ${symbol} ${reentryContracts}张`, {
                         triggerType: 'momentum_reentry',
                         contracts: reentryContracts,
                       });
@@ -1358,15 +1373,15 @@ async function checkPositions() {
           console.log(`[Trail] 🛑 ${symbol}: 触发止损! 现价 $${currentPrice.toFixed(2)} ≥ 止损 $${state.slPrice.toFixed(2)}`);
           lastStopLossTime[symbol] = Date.now();
           console.log(`[Trail] ⏳ ${symbol}: 止损冷却 ${STOP_LOSS_COOLDOWN_MS/60000}分钟`);
-          const closeResult = await cexEngine.closePosition(symbol, pos.side, getExchangeId(symbol));
+          const closeResult = await cexEngine.closePosition(symbol, pos.side, exchangeId);
           if (closeResult.success && closeResult.realizedPnl !== undefined) {
-            if (closeResult.pnlPercent !== undefined) adaptive.recordReturn(symbol, closeResult.pnlPercent);
+            if (closeResult.pnlPercent !== undefined) adaptive.recordReturn(key, closeResult.pnlPercent);
             // [v2.0修复] 记录凯利数据
             if (closeResult.pnlPercent !== undefined) {
-              try { adaptive.recordTrade({ timestamp: Date.now(), symbol, side: pos.side, entryPrice: pos.entryPrice, exitPrice: closeResult.closePrice, contracts, pnl: closeResult.realizedPnl, pnlPercent: closeResult.pnlPercent, reason: '止损(空)', style: style.style, marketRegime, confidence: 50 }); } catch(e) {}
+              try { adaptive.recordTrade({ timestamp: Date.now(), symbol: key, side: pos.side, entryPrice: pos.entryPrice, exitPrice: closeResult.closePrice, contracts, pnl: closeResult.realizedPnl, pnlPercent: closeResult.pnlPercent, reason: '止损(空)', style: style.style, marketRegime, confidence: 50 }); } catch(e) {}
             }
-            await riskManager.onPositionClosed(symbol, pos.side, closeResult.realizedPnl, closeResult.pnlPercent, getExchangeId(symbol));
-            appendCexLog('auto_close', `[${cexEngine.getExchangeLabel(getExchangeId(symbol))}] 止损平${pos.side === 'long' ? '多' : '空'} ${symbol} ${contracts.toString().padEnd(6)}张 @${closeResult.closePrice} PnL:${closeResult.realizedPnl>0?'+':''}$${closeResult.realizedPnl?.toFixed(2)||'?'} (${closeResult.pnlPercent>0?'+':''}${closeResult.pnlPercent?.toFixed(2)||'?'}%)`, {
+            await riskManager.onPositionClosed(symbol, pos.side, closeResult.realizedPnl, closeResult.pnlPercent, exchangeId);
+            appendCexLog('auto_close', `[${cexEngine.getExchangeLabel(exchangeId)}] 止损平${pos.side === 'long' ? '多' : '空'} ${symbol} ${contracts.toString().padEnd(6)}张 @${closeResult.closePrice} PnL:${closeResult.realizedPnl>0?'+':''}$${closeResult.realizedPnl?.toFixed(2)||'?'} (${closeResult.pnlPercent>0?'+':''}${closeResult.pnlPercent?.toFixed(2)||'?'}%)`, {
               realizedPnl: closeResult.realizedPnl,
               pnlPercent: closeResult.pnlPercent,
               triggerType: 'stop_loss',
@@ -1377,15 +1392,15 @@ async function checkPositions() {
         }
         if (state.tpPrice > 0 && currentPrice <= state.tpPrice) {
           console.log(`[Trail] ✅ ${symbol}: 触发止盈! 现价 $${currentPrice.toFixed(2)} ≤ 止盈 $${state.tpPrice.toFixed(2)}`);
-          const closeResult = await cexEngine.closePosition(symbol, pos.side, getExchangeId(symbol));
+          const closeResult = await cexEngine.closePosition(symbol, pos.side, exchangeId);
           if (closeResult.success && closeResult.realizedPnl !== undefined) {
-            if (closeResult.pnlPercent !== undefined) adaptive.recordReturn(symbol, closeResult.pnlPercent);
+            if (closeResult.pnlPercent !== undefined) adaptive.recordReturn(key, closeResult.pnlPercent);
             // [v2.0修复] 记录凯利数据
             if (closeResult.pnlPercent !== undefined) {
-              try { adaptive.recordTrade({ timestamp: Date.now(), symbol, side: pos.side, entryPrice: pos.entryPrice, exitPrice: closeResult.closePrice, contracts, pnl: closeResult.realizedPnl, pnlPercent: closeResult.pnlPercent, reason: '止盈(空)', style: style.style, marketRegime, confidence: 50 }); } catch(e) {}
+              try { adaptive.recordTrade({ timestamp: Date.now(), symbol: key, side: pos.side, entryPrice: pos.entryPrice, exitPrice: closeResult.closePrice, contracts, pnl: closeResult.realizedPnl, pnlPercent: closeResult.pnlPercent, reason: '止盈(空)', style: style.style, marketRegime, confidence: 50 }); } catch(e) {}
             }
-            await riskManager.onPositionClosed(symbol, pos.side, closeResult.realizedPnl, closeResult.pnlPercent, getExchangeId(symbol));
-            appendCexLog('auto_close', `[${cexEngine.getExchangeLabel(getExchangeId(symbol))}] 止盈平${pos.side === 'long' ? '多' : '空'} ${symbol} ${contracts.toString().padEnd(6)}张 @${closeResult.closePrice} PnL:${closeResult.realizedPnl>0?'+':''}$${closeResult.realizedPnl?.toFixed(2)||'?'} (${closeResult.pnlPercent>0?'+':''}${closeResult.pnlPercent?.toFixed(2)||'?'}%)`, {
+            await riskManager.onPositionClosed(symbol, pos.side, closeResult.realizedPnl, closeResult.pnlPercent, exchangeId);
+            appendCexLog('auto_close', `[${cexEngine.getExchangeLabel(exchangeId)}] 止盈平${pos.side === 'long' ? '多' : '空'} ${symbol} ${contracts.toString().padEnd(6)}张 @${closeResult.closePrice} PnL:${closeResult.realizedPnl>0?'+':''}$${closeResult.realizedPnl?.toFixed(2)||'?'} (${closeResult.pnlPercent>0?'+':''}${closeResult.pnlPercent?.toFixed(2)||'?'}%)`, {
               realizedPnl: closeResult.realizedPnl,
               pnlPercent: closeResult.pnlPercent,
               triggerType: 'take_profit',
@@ -1398,17 +1413,17 @@ async function checkPositions() {
               const inCooldown = (Date.now() - lastSl) < STOP_LOSS_COOLDOWN_MS;
               if (riskStatus.canTrade && state.marketRegime === 'trending' && !inCooldown) {
                 console.log(`[Trail] 🚀 ${symbol}: 趋势仍强(${state.marketRegime}),尝试重入（空）`);
-                const evalSignal = currentSignals[symbol];
+                const evalSignal = currentSignals[key];
                 if (evalSignal && evalSignal.trend && evalSignal.trend.direction === pos.side && (evalSignal.trend.confidence || 0) > 40) {
                   const reentryContracts = Math.abs(contracts * 0.5);
                   const minForSymbol = { 'ETH/USDT': 0.01, 'BTC/USDT:USDT': 0.001 }[symbol] || 0.001;
                   if (reentryContracts >= minForSymbol) {
-                    const result = await cexEngine.openPosition(symbol, pos.side, reentryContracts, getExchangeId(symbol), {
+                    const result = await cexEngine.openPosition(symbol, pos.side, reentryContracts, exchangeId, {
                       marginMode: 'isolated',
                     });
                     if (result.success) {
                       console.log(`[Trail] 🔄 ${symbol}: 趋势重入成功! ${reentryContracts}张`);
-                      appendCexLog('auto_close', `[${cexEngine.getExchangeLabel(getExchangeId(symbol))}] 趋势重入${pos.side === 'long' ? '多' : '空'} ${symbol} ${reentryContracts}张`, {
+                      appendCexLog('auto_close', `[${cexEngine.getExchangeLabel(exchangeId)}] 趋势重入${pos.side === 'long' ? '多' : '空'} ${symbol} ${reentryContracts}张`, {
                         triggerType: 'momentum_reentry',
                         contracts: reentryContracts,
                       });
@@ -1426,13 +1441,13 @@ async function checkPositions() {
     }
 
     // ====== 清理已平仓的跟踪状态 ======
-    for (const sym of Object.keys(trailingState)) {
-      if (!trackedSymbols.has(sym)) {
-        console.log(`[Trail] 🧹 ${sym}: 仓位已平(ALGO止盈止损成交)，清除追踪状态`);
+    for (const symKey of Object.keys(trailingState)) {
+      if (!trackedSymbols.has(symKey)) {
+        console.log(`[Trail] 🧹 ${symKey}: 仓位已平(ALGO止盈止损成交)，清除追踪状态`);
         // 记录ALGO止盈止损平仓日志（防止前面循环没走到）
         if (appendCexLog) {
           try {
-            const ts = trailingState[sym];
+            const ts = trailingState[symKey];
             if (ts) {
               let triggerDesc = '条件单平仓(ALGO)';
               // 如果有side信息，可以通过对比入场价和止损/止盈价判断方向
@@ -1451,7 +1466,10 @@ async function checkPositions() {
                   triggerDesc = '初始止盈/止损触发(ALGO)';
                 }
                 // PnL无法获取，但至少标签清楚了
-                appendCexLog('auto_close', `[${cexEngine.getExchangeLabel(getExchangeId(sym))}] ${triggerDesc} ${sym} @${ts.entryPrice} (盈亏:? 请查交易所记录)`, {
+                const parts = symKey.split('::');
+                const sym = parts[0];
+                const ex = parts[1] || 'gate';
+                appendCexLog('auto_close', `[${cexEngine.getExchangeLabel(ex)}] ${triggerDesc} ${sym} @${ts.entryPrice} (盈亏:? 请查交易所记录)`, {
                   triggerType: 'algo_filled',
                   entryPrice: ts.entryPrice,
                   trailActivated: ts.trailActivated,
@@ -1461,7 +1479,7 @@ async function checkPositions() {
             }
           } catch(e) {}
         }
-        delete trailingState[sym];
+        delete trailingState[symKey];
       }
     }
 
@@ -1512,20 +1530,23 @@ function getActiveSymbolsByMode() {
 /**
  * 设置策略模式（双币/单币）
  */
-export async function startStrategy(symbols = ['ETH/USDT']) {
+export async function startStrategy(symbols = ['ETH/USDT'], exchangeMap) {
   // 如果策略已在运行，追加新交易对
   if (isRunning) {
-    if (symbols && symbols.length > 0) {
+    if (symbols && symbols.length > 0 && exchangeMap && Object.keys(exchangeMap).length > 0) {
       const newSymbols = [];
-      for (const sym of symbols) {
-        if (!activeSymbols.includes(sym)) {
-          activeSymbols.push(sym);
+      for (const [sym, exId] of Object.entries(exchangeMap)) {
+        if (!exchangeSymbols[exId]) exchangeSymbols[exId] = [];
+        if (!exchangeSymbols[exId].includes(sym)) {
+          exchangeSymbols[exId].push(sym);
           newSymbols.push(sym);
+          symbolExchange[sym] = exId; // 向后兼容
         }
       }
+      // activeSymbols = 各交易所去重合并
+      activeSymbols = [...new Set(Object.values(exchangeSymbols).flat())];
       // 按交易所启动数据流（通用方式）
-      for (const sym of newSymbols) {
-        const exId = getExchangeId(sym);
+      for (const [sym, exId] of Object.entries(exchangeMap)) {
         if (exId === 'binance') {
           const wsSym = sym.replace(/\/USDT.*$/, 'USDT').replace('/', '').toLowerCase();
           cexData.addSymbol(wsSym);
@@ -1541,14 +1562,34 @@ export async function startStrategy(symbols = ['ETH/USDT']) {
           await cexData.prefetchExchangeKlines(exId, sym, ['5m'], 50).catch(()=>{});
         }
       }
-      console.log(`[Strategy] ➕ 追加交易对: ${newSymbols.join(', ')} (activeSymbols: ${activeSymbols.length})`);
+      console.log(`[Strategy] ➕ 追加交易对: ${newSymbols.join(', ')} (交易所: ${Object.keys(exchangeSymbols).join(',')})`);
     }
-    return { success: true, symbols: activeSymbols };
+    return { success: true, symbols: activeSymbols, exchanges: Object.keys(exchangeSymbols) };
   }
 
   // 根据策略模式确定实际交易对
   if (symbols && symbols.length > 0) {
-    activeSymbols = symbols;
+    if (!exchangeMap || Object.keys(exchangeMap).length === 0) {
+      // 无exchangeMap时用第一个已配置的交易所，而非hardcode gate
+      let fallbackEx = 'gate';
+      try {
+        const status = cexEngine.getStatus();
+        const configured = (status.configuredExchanges || []).filter(c => c.initialized);
+        if (configured.length > 0) fallbackEx = configured[0].exchangeId;
+      } catch {}
+      exchangeMap = {};
+      for (const sym of symbols) {
+        exchangeMap[sym] = symbolExchange[sym] || fallbackEx;
+      }
+    }
+    // 根据 exchangeMap 分交易所
+    exchangeSymbols = {};
+    for (const [sym, exId] of Object.entries(exchangeMap)) {
+      if (!exchangeSymbols[exId]) exchangeSymbols[exId] = [];
+      if (!exchangeSymbols[exId].includes(sym)) exchangeSymbols[exId].push(sym);
+      symbolExchange[sym] = exId; // 向后兼容
+    }
+    activeSymbols = [...new Set(Object.values(exchangeSymbols).flat())];
     if (strategyMode === 'single' && symbols.length === 1) {
       primarySymbol = symbols[0];
     }
@@ -1558,29 +1599,29 @@ export async function startStrategy(symbols = ['ETH/USDT']) {
   isRunning = true;
 
   // 按交易所启动数据流（通用方式）
-  const bnSymbols = symbols.filter(s => getExchangeId(s) === 'binance');
-  if (bnSymbols.length > 0) {
-    const wsSymbols = bnSymbols.map(s =>
-      s.replace(/\/USDT.*$/, 'USDT').replace('/', '').toLowerCase()
-    );
-    cexData.startDataStream(wsSymbols);
-  }
-  for (const sym of symbols) {
-    const exId = getExchangeId(sym);
-    if (exId !== 'binance') {
-      cexData.addExchangeSymbol(sym, exId);
+  for (const [exId, syms] of Object.entries(exchangeSymbols)) {
+    if (exId === 'binance') {
+      const wsSymbols = syms.map(s =>
+        s.replace(/\/USDT.*$/, 'USDT').replace('/', '').toLowerCase()
+      );
+      cexData.startDataStream(wsSymbols);
+    } else {
+      for (const sym of syms) {
+        cexData.addExchangeSymbol(sym, exId);
+      }
     }
   }
 
   // 预加载历史K线（通用方式）
-  for (const sym of symbols) {
-    const exId = getExchangeId(sym);
-    if (exId === 'binance') {
-      await cexData.prefetchKlines(sym, ['15m', '1h'], 100);
-      await cexData.prefetchKlines(sym, ['5m'], 50);
-    } else {
-      await cexData.prefetchExchangeKlines(exId, sym, ['15m', '1h'], 100);
-      await cexData.prefetchExchangeKlines(exId, sym, ['5m'], 50);
+  for (const [exId, syms] of Object.entries(exchangeSymbols)) {
+    for (const sym of syms) {
+      if (exId === 'binance') {
+        await cexData.prefetchKlines(sym, ['15m', '1h'], 100);
+        await cexData.prefetchKlines(sym, ['5m'], 50);
+      } else {
+        await cexData.prefetchExchangeKlines(exId, sym, ['15m', '1h'], 100);
+        await cexData.prefetchExchangeKlines(exId, sym, ['5m'], 50);
+      }
     }
   }
 
@@ -1597,8 +1638,9 @@ export async function startStrategy(symbols = ['ETH/USDT']) {
     await checkPositions();
   }, trailIntervalMs);
 
-  console.log(`[Strategy] 🎯 策略引擎已启动 (${symbols.join(', ')})`);
-  return { success: true, symbols: activeSymbols };
+  const exLabels = Object.keys(exchangeSymbols).map(ex => ({binance:'币安',gate:'Gate',okx:'OKX'})[ex] || ex).join(',');
+  console.log(`[Strategy] 🎯 策略引擎已启动 (${activeSymbols.join(', ')}) [${exLabels}]`);
+  return { success: true, symbols: activeSymbols, exchanges: Object.keys(exchangeSymbols) };
 }
 
 /**
@@ -1606,40 +1648,54 @@ export async function startStrategy(symbols = ['ETH/USDT']) {
  */
 export function stopStrategy(exchangeId) {
   if (exchangeId) {
-    // 只停止指定交易所的策略
-    const remaining = activeSymbols.filter(s => getExchangeId(s) !== exchangeId);
-    if (remaining.length === activeSymbols.length) {
+    if (!exchangeSymbols[exchangeId] || exchangeSymbols[exchangeId].length === 0) {
       return { success: false, error: '该交易所没有活跃策略' };
     }
-    if (remaining.length === 0) {
-      // 无剩余交易对，完全停止
+    delete exchangeSymbols[exchangeId];
+    // 从 autoOpenedPositions 中移除该交易所的条目
+    for (const k of [...autoOpenedPositions]) {
+      if (k.endsWith('::'+exchangeId)) autoOpenedPositions.delete(k);
+    }
+    // 重新计算 activeSymbols 为各交易所去重合并
+    activeSymbols = [...new Set(Object.values(exchangeSymbols).flat())];
+    if (Object.keys(exchangeSymbols).length === 0) {
+      // 完全停止
       isRunning = false;
       if (strategyTimer) { clearInterval(strategyTimer); strategyTimer = null; }
       if (checkTimer) { clearInterval(checkTimer); checkTimer = null; }
       cexData.stopDataStream();
-      activeSymbols = [];
+      // 清理订阅
+      for (const fn of unsubscribeFns) {
+        try { fn(); } catch {}
+      }
+      unsubscribeFns = [];
       console.log('[Strategy] 🛑 策略引擎已完全停止');
       return { success: true, exchangeId, fullStop: true };
     }
-    activeSymbols = remaining;
-    console.log(`[Strategy] 🛑 已停止 ${exchangeId} 策略 (剩余 ${remaining.length} 个交易对: ${remaining.join(',')})`);
-    return { success: true, exchangeId, fullStop: false, remainingSymbols: remaining };
+    console.log(`[Strategy] 🛑 已停止 ${exchangeId} 策略 (剩余 ${Object.keys(exchangeSymbols).length} 个交易所)`);
+    return { success: true, exchangeId, fullStop: false, remainingExchanges: Object.keys(exchangeSymbols) };
   }
+  // 全停
   isRunning = false;
   if (strategyTimer) {
     clearInterval(strategyTimer);
     strategyTimer = null;
   }
+  if (checkTimer) {
+    clearInterval(checkTimer);
+    checkTimer = null;
+  }
   cexData.stopDataStream();
-
   // 清理订阅
   for (const fn of unsubscribeFns) {
     try { fn(); } catch {}
   }
   unsubscribeFns = [];
-
+  activeSymbols = [];
+  exchangeSymbols = {};
+  autoOpenedPositions.clear();
   console.log('[Strategy] 🛑 策略引擎已停止');
-  return { success: true };
+  return { success: true, fullStop: true };
 }
 
 
@@ -1668,19 +1724,15 @@ export function getTrailInterval() {
  * 获取策略状态
  */
 export function getStrategyStatus() {
-  // 计算各交易所独立运行状态
-  const runningExchanges = {};
-  for (const sym of activeSymbols) {
-    const ex = getExchangeId(sym);
-    runningExchanges[ex] = true;
-  }
+  const runningExchanges = Object.keys(exchangeSymbols);
+  const runningLabel = runningExchanges.length > 0
+    ? '[' + runningExchanges.map(ex => ({binance:'币安',gate:'Gate',okx:'OKX'})[ex] || ex).join('+') + ']'
+    : '';
   return {
-    running: isRunning,
-    runningExchanges: Object.keys(runningExchanges),
-    runningLabel: Object.keys(runningExchanges).length > 0
-      ? '[' + Object.keys(runningExchanges).map(ex => ({binance:'币安',gate:'Gate',okx:'OKX'})[ex] || ex).join('+') + ']'
-      : '',
-    activeSymbols,
+    running: isRunning && Object.keys(exchangeSymbols).length > 0,
+    runningExchanges,
+    runningLabel,
+    activeSymbols: [...new Set(Object.values(exchangeSymbols).flat())],
     currentSignals,
     historyCount: positionHistory.length,
     recentHistory: positionHistory.slice(-10),
@@ -1693,21 +1745,18 @@ export function getStrategyStatus() {
  */
 export function getSignalsSummary() {
   const summary = {};
-  for (const [sym, sig] of Object.entries(currentSignals)) {
-    summary[sym] = {
-      timestamp: new Date(sig.timestamp).toLocaleTimeString(),
-      trend: `${sig.trend.direction} (${sig.trend.confidence})`,
-      meanRev: `${sig.meanReversion.direction} (${sig.meanReversion.confidence})`,
-      combined: `${sig.combined.direction} (${sig.combined.confidence})`,
-      action: sig.combined.action,
-      hasPosition: sig.hasPosition,
-      rsi: sig.meanReversion.rsi,
-      score: sig.meanReversion.score || sig.combined.confidence,
-      momentum: sig.trend.score,
+  for (const [key, sig] of Object.entries(currentSignals)) {
+    const parts = key.split('::');
+    const sym = parts[0];
+    const ex = parts[1] || 'gate';
+    const exLabel = ({binance:'币安',gate:'Gate',okx:'OKX'})[ex] || ex;
+    summary[key] = {
+      ...sig,
+      displaySymbol: sym + ' [' + exLabel + ']',
     };
   }
   return summary;
 }
 
-/** * 获取追踪止盈状态（供前端展示） */export function getTrailingState() {  const result = {};  for (const [sym, state] of Object.entries(trailingState)) {    result[sym] = {      slPrice: state.slPrice,      tpPrice: state.tpPrice,      trailActivated: state.trailActivated,      trailActivatePercent: state.trailActivatePercent,      trailStepPercent: state.trailStepPercent,      bestStop: state.bestStop,      marketRegime: state.marketRegime,      atrPercent: state.atrPercent,      lastUpdated: state.lastUpdated,    };  }  return result;}
+/** * 获取追踪止盈状态（供前端展示） */export function getTrailingState() {  const result = {};  for (const [symKey, state] of Object.entries(trailingState)) {    const parts = symKey.split('::');    const sym = parts[0];    const ex = parts[1] || 'gate';    const exLabel = ({binance:'币安',gate:'Gate',okx:'OKX'})[ex] || ex;    result[symKey] = {      ...state,      displaySymbol: sym + ' [' + exLabel + ']',    };  }  return result;}
 console.log('[Strategy] 🧠 策略引擎已加载 (v2.0 — 震荡市不开仓+连败暂停+反转冷却)');
