@@ -23,6 +23,7 @@ let isEvaluating = false; // 评估锁，防并发重复开仓
 let strategyTimer = null;
 let checkTimer = null;
 let activeSymbols = ['ETH/USDT'];
+let _consecutiveLosses = 0;  // 全局连败计数（用于自动降级）
 let symbolExchange = {};      // { 'ETH/USDT': 'binance'|'gate' } — 每个交易对所属交易所
 let currentSignals = {};      // { 'ETH/USDT': { trend, meanReversion, combined, decision } }
 let positionHistory = [];     // 策略开平记录
@@ -551,6 +552,22 @@ const closeResult = await cexEngine.closePosition(symbol, posSide);
               }
             } catch(e) {}
             await riskManager.onPositionClosed(symbol, posSide, closeResult.realizedPnl, closeResult.pnlPercent, getExchangeId(symbol));
+            // 连败跟踪与自动降级
+            if (closeResult.realizedPnl < 0) {
+              _consecutiveLosses = (_consecutiveLosses || 0) + 1;
+              console.log(`[Strategy] 📉 全局连败${_consecutiveLosses}次`);
+              if (_consecutiveLosses >= 3) {
+                const curStyle = cexEngine.getCurrentStyle().style;
+                if (curStyle !== 'conservative') {
+                  const better = curStyle === 'aggressive' ? 'moderate' : 'conservative';
+                  cexEngine.setStyle(better);
+                  appendCexLog('style_change', `切换风格: ${better === 'moderate' ? '稳健' : '保守'} (连败${_consecutiveLosses}次自动降级)`);
+                  console.log(`[Strategy] 📉 连败${_consecutiveLosses}次，自动降级至${better === 'moderate' ? '稳健' : '保守'}`);
+                }
+              }
+            } else {
+              _consecutiveLosses = 0;
+            }
           } else {
             appendCexLog('auto_close', `[${cexEngine.getExchangeLabel(getExchangeId(symbol))}] 策略平${posSide === 'long' ? '多' : '空'} ${symbol} ${(currentPosition?.contracts || '?').toString().padEnd(6)}张 (信号反转) PnL:${closeResult.realizedPnl>0?'+':''}$${closeResult.realizedPnl?.toFixed(2)||'?'} (${closeResult.pnlPercent>0?'+':''}${closeResult.pnlPercent?.toFixed(2)||'?'}%)`, { realizedPnl: closeResult.realizedPnl, pnlPercent: closeResult.pnlPercent, contracts: currentPosition?.contracts });
           }
@@ -624,6 +641,7 @@ const closeResult = await cexEngine.closePosition(symbol, posSide);
         const posCalc = cexEngine.calculatePosition(totalCap);
         // ④ 动态杠杆：根据ATR和市场状态调整
         let dynLeverage = posCalc.leverage || 5;
+        let atrInfo = null;
         try {
           const klines = cexData.getKlines(symbol, '15m', 50);
           if (klines && klines.length > 15) {
@@ -632,11 +650,20 @@ const closeResult = await cexEngine.closePosition(symbol, posSide);
             const closes = klines.map(k => k.close);
             const atr = adaptive.calcATR(highs, lows, closes);
             if (atr && atr.atrPercent > 0) {
+              atrInfo = atr;
               dynLeverage = adaptive.calculateDynamicLeverage(posCalc.leverage || 5, atr.atrPercent, marketRegime);
               console.log(`[Strategy] ⚙️ ${symbol}: 动态杠杆 ${posCalc.leverage}x→${dynLeverage}x (ATR:${atr.atrPercent.toFixed(1)}%, ${marketRegime})`);
             }
           }
         } catch(e) {}
+        // 低波动率过滤：ATR < 0.25% 且已有连败记录 → 不开仓避免横盘磨损
+        if (atrInfo && atrInfo.atrPercent < 0.25 && consecCheck.shouldPause === false && adaptive.checkConsecutiveLosses) {
+          const lossCheck = adaptive.checkConsecutiveLosses(symbol);
+          if (lossCheck.consecutiveLosses >= 1) {
+            console.log(`[Strategy] ⏸ ${symbol}: 波动率过低(ATR:${atrInfo.atrPercent.toFixed(2)}%), 连败${lossCheck.consecutiveLosses}次, 横盘不开仓`);
+            continue;
+          }
+        }
 
         const stats = adaptive.getTradeStats(20);
         const minForSymbol = { 'ETH/USDT': 0.01, 'BTC/USDT:USDT': 0.001 }[symbol] || 0.001;

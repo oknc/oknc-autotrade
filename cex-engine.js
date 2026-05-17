@@ -192,8 +192,9 @@ async function restCreateAlgoOrder(symbol, side, type, quantity, triggerPrice, o
   if (options.reduceOnly) params.reduceOnly = 'true';
   if (options.price !== undefined && options.price > 0) params.price = String(priceToPrecision(options.price));
 
-  // 重试机制：失败后重试2次，每次间隔300ms
+  // 重试机制：失败后重试2次，每次间隔300ms，遇到-4061（单边模式不接受positionSide）时去掉该参数
   let lastError = '';
+  let triedWithoutPosSide = false;
   for (let attempt = 0; attempt < 3; attempt++) {
     if (attempt > 0) {
       console.log(`[Algo] 🔄 重试 ${symbol} ${type} @${triggerPrice} (第${attempt+1}次)`);
@@ -202,6 +203,15 @@ async function restCreateAlgoOrder(symbol, side, type, quantity, triggerPrice, o
     const result = await binanceRequest('POST', '/fapi/v1/algoOrder', params);
     if (!result.code) {
       return { success: true, algoId: result.algoId, clientAlgoId: result.clientAlgoId };
+    }
+    // 单边模式不接受 positionSide，去掉后重试
+    if (result.code === -4061 && params.positionSide && !triedWithoutPosSide) {
+      delete params.positionSide;
+      delete params.reduceOnly; // 单边模式也不需要 reduceOnly
+      triedWithoutPosSide = true;
+      console.log(`[Algo] 🔄 ${symbol}: Binance单边模式，去掉positionSide重试`);
+      attempt--; // 不消耗重试次数
+      continue;
     }
     lastError = '[' + result.code + '] ' + (result.msg || '');
   }
@@ -391,6 +401,8 @@ async function gateCancelAllOrders(symbol) {
 let exchanges = {};
 let activeExchange = null;
 let exchangeConfigs = [];
+let _banUntil = null;  // Binance 418熔断时间戳
+let _balanceCache = null;  // 余额缓存
 
 // ============ 合约配置（三套预设风格）============
 export const STYLE_PRESETS = {
@@ -557,6 +569,11 @@ export function initAllExchanges() {
 
 function getExchange(exchangeId) {
   const id = exchangeId || activeExchange || 'gate';
+  // 418 熔断检查：Binance被封5分钟内直接抛错，不再发请求
+  if (id === 'binance' && _banUntil && Date.now() < _banUntil) {
+    const wait = Math.ceil((_banUntil - Date.now()) / 1000);
+    throw new Error(`Binance API被封，剩余${wait}秒冷却`);
+  }
   const entry = exchanges[id];
   if (entry) return entry.exchange;
   // 未初始化时创建临时只读连接（公共数据查询，不覆盖已认证实例）
@@ -587,16 +604,42 @@ export function setActiveExchange(exchangeId) {
 // ============ 合约交易操作 ============
 
 export async function getBalance(exchangeId) {
+  // 从文件缓存中加载（跨重启持久化）
+  if (!_balanceCache) _balanceCache = _loadBalanceCache();
+  // 返回缓存中的余额（避免IP被封时反复请求）
+  if (_balanceCache && _balanceCache[exchangeId] && _balanceCache[exchangeId]._lastOkTime) {
+    const elapsed = Date.now() - _balanceCache[exchangeId]._lastOkTime;
+    // 缓存1分钟内有效（正常时走实时数据）
+    if (elapsed < 60000) {
+      const cached = _balanceCache[exchangeId];
+      return { success: true, total: cached.total, free: cached.free, used: cached.used, _cached: true };
+    }
+  }
   try {
     const ex = getExchange(exchangeId);
     const balance = await ex.fetchBalance();
-    return {
+    const result = {
       success: true,
       total: balance.total?.USDT || 0,
       free: balance.free?.USDT || 0,
       used: balance.used?.USDT || 0,
     };
+    // 更新缓存
+    if (!_balanceCache) _balanceCache = {};
+    _balanceCache[exchangeId] = { ...result, _lastOkTime: Date.now() };
+    _saveBalanceCache();
+    return result;
   } catch (err) {
+    // 检测418封禁，触发熔断
+    if ((err.message || '').includes('418') || (err.message || '').includes('Way too many requests')) {
+      _banUntil = Date.now() + 5 * 60 * 1000;
+      console.log(`[Engine] 🚨 Binance 418 封禁检测，熔断5分钟`);
+    }
+    // API失败时返回缓存数据（如果有）
+    const cached = _balanceCache?.[exchangeId];
+    if (cached && cached._lastOkTime) {
+      return { success: true, total: cached.total, free: cached.free, used: cached.used, _cached: true, _note: '上次缓存' };
+    }
     return { success: false, error: err.message, total: 0, free: 0, used: 0 };
   }
 }
@@ -630,6 +673,11 @@ export async function getPositions(exchangeId, symbol) {
         })),
     };
   } catch (err) {
+    // 检测418封禁
+    if ((err.message || '').includes('418') || (err.message || '').includes('Way too many requests')) {
+      _banUntil = Date.now() + 5 * 60 * 1000;
+      console.log(`[Engine] 🚨 Binance 418 封禁检测，熔断5分钟`);
+    }
     return { success: false, error: err.message, positions: [] };
   }
 }
@@ -764,7 +812,19 @@ export async function openPosition(symbol, side, contracts, exchangeId, options 
       }
     } catch(e) { console.log('[openPosition] 精度调整失败:', e.message); }
 
-    const order = await ex.createMarketOrder(symbol, orderSide, contracts, undefined, { ...okxParams(exchangeId, side), ...binanceOrderParams(side) });
+    let order;
+    try {
+      order = await ex.createMarketOrder(symbol, orderSide, contracts, undefined, { ...okxParams(exchangeId, side), ...binanceOrderParams(side) });
+    } catch (e) {
+      const errMsg = String(e?.message || e || '');
+      // Binance单边模式不接受 positionSide，去掉重试
+      if (errMsg.includes('-4061')) {
+        console.log(`[openPosition] ${symbol}: Binance单边模式，去掉positionSide重试`);
+        order = await ex.createMarketOrder(symbol, orderSide, contracts);
+      } else {
+        throw e;
+      }
+    }
     const filledPrice = order.price || markPrice;
 
     // 先清理该币对已有的旧订单（普通单+Algo条件单）
@@ -1105,6 +1165,24 @@ export async function updateStopOrders(symbol, side, stopLossPrice, takeProfitPr
 
 // ============ REST API 导出 ============
 export { restCreateOrder, restCancelOrder, restCancelAllOrders, restGetOpenOrders, restCreateAlgoOrder, restCancelAlgoOrder, toBinanceSymbol, binanceRequest, createConditionalOrder };
+
+// ============ 余额缓存持久化 ============
+
+/** 从文件加载余额缓存 */
+function _loadBalanceCache() {
+  try {
+    const cacheFile = path.join(__dirname, 'data', 'balance-cache.json');
+    if (fs.existsSync(cacheFile)) return JSON.parse(fs.readFileSync(cacheFile, 'utf8'));
+  } catch {}
+  return {};
+}
+/** 保存余额缓存到文件 */
+function _saveBalanceCache() {
+  try {
+    const cacheFile = path.join(__dirname, 'data', 'balance-cache.json');
+    fs.writeFileSync(cacheFile, JSON.stringify(_balanceCache || {}));
+  } catch {}
+}
 
 // ============ 初始化 ============
 loadExchangeConfigs();
