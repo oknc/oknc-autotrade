@@ -34,7 +34,7 @@ let unsubscribeFns = [];      // WebSocket 取消订阅函数
 
 /** 获取交易对对应的交易所ID（默认 gate） */
 function getExchangeId(symbol) {
-  return symbolExchange[symbol] || 'binance';
+  return symbolExchange[symbol] || 'gate';
 }
 
 /** 设置交易对对应的交易所 */
@@ -525,7 +525,7 @@ async function evaluateStrategy() {
             console.log(`[Strategy] ${symbol}: 信号翻转至${flipDir}(已确认), 平${posSide}仓`);
             currentFlip.long = 0;
             currentFlip.short = 0;
-const closeResult = await cexEngine.closePosition(symbol, posSide);
+const closeResult = await cexEngine.closePosition(symbol, posSide, getExchangeId(symbol));
           if (closeResult.success && closeResult.realizedPnl !== undefined) {
             appendCexLog('auto_close', `[${cexEngine.getExchangeLabel(getExchangeId(symbol))}] 策略平${posSide === 'long' ? '多' : '空'} ${symbol} ${(currentPosition?.contracts || '?').toString().padEnd(6)}张 @${closeResult.closePrice} PnL:${closeResult.realizedPnl>0?'+':''}$${closeResult.realizedPnl?.toFixed(2)||'?'} (${closeResult.pnlPercent>0?'+':''}${closeResult.pnlPercent?.toFixed(2)||'?'}%)`, {
               realizedPnl: closeResult.realizedPnl,
@@ -615,7 +615,7 @@ const closeResult = await cexEngine.closePosition(symbol, posSide);
           continue;
         }
         try {
-          const allPosResult = await cexEngine.getPositions();
+          const allPosResult = await cexEngine.getPositions(getExchangeId(symbol));
           const allPositions = allPosResult.positions || [];
           // 检查当前交易对是否已有仓位（任何方向）
           const hasSameSymbolPos = allPositions.some(p => {
@@ -630,13 +630,13 @@ const closeResult = await cexEngine.closePosition(symbol, posSide);
         } catch(e) {}
         const side = combined.action === 'open_long' ? 'long' : 'short';
         // ====== 自适应仓位管理 ======
-        const bal = await cexEngine.getBalance();
+        const bal = await cexEngine.getBalance(getExchangeId(symbol));
         // ② 使用可用余额（已有持仓时扣除已用保证金）
         const totalCap = bal.free || bal.total || 30;
         // 双币模式：每个币种分一半资金，单币模式：全给主币
         const modeSplit = (strategyMode === 'dual' && activeSymbols.length > 1) ? 0.5 : 1.0;
         const cappedCap = totalCap * modeSplit;
-        const ticker = await cexEngine.getTicker(symbol);
+        const ticker = await cexEngine.getTicker(symbol, getExchangeId(symbol));
         const price = ticker.last || ticker.markPrice;
         const posCalc = cexEngine.calculatePosition(totalCap);
         // ④ 动态杠杆：根据ATR和市场状态调整
@@ -776,8 +776,17 @@ async function checkPositions() {
   await riskManager.riskCheck();
 
   try {
-    const posResult = await cexEngine.getPositions();
-    const positions = posResult.positions || [];
+    // 多交易所：从所有配置的交易所获取持仓
+    const allExchanges = [...new Set(activeSymbols.map(s => getExchangeId(s)))];
+    let positions = [];
+    for (const exId of allExchanges) {
+      try {
+        const r = await cexEngine.getPositions(exId);
+        if (r.positions) positions = positions.concat(r.positions);
+      } catch(e) {
+        console.log(`[Trail] ⚠️ 查询${exId}持仓失败: ${e.message}`);
+      }
+    }
     const trackedSymbols = new Set();
 
     for (const pos of positions) {
@@ -966,7 +975,7 @@ async function checkPositions() {
         if (boundedTrailStop !== newTrailStop) {
           console.log(`[Trail] 🛡️ ${symbol}: 追踪止损触碰硬底保护 $${newTrailStop.toFixed(2)}→$${boundedTrailStop.toFixed(2)} (floor:$${hardFloor.toFixed(2)}) — 强制平仓!`);
           try {
-            const closeResult = await cexEngine.closePosition(symbol, pos.side);
+            const closeResult = await cexEngine.closePosition(symbol, pos.side, getExchangeId(symbol));
             if (closeResult.success) {
               console.log(`[Trail] 🛑 ${symbol}: 硬底保护触发强制平仓成功 PnL:$${closeResult.realizedPnl}`);
               if (closeResult.pnlPercent !== undefined) adaptive.recordReturn(symbol, closeResult.pnlPercent);
@@ -1514,24 +1523,22 @@ export async function startStrategy(symbols = ['ETH/USDT']) {
           newSymbols.push(sym);
         }
       }
-      // 按交易所启动数据流
-      const bnSymbols = newSymbols.filter(s => getExchangeId(s) === 'binance');
-      const gtSymbols = newSymbols.filter(s => getExchangeId(s) === 'gate');
-      if (bnSymbols.length > 0) {
-        const wsSyms = bnSymbols.map(s => s.replace(/\/USDT.*$/, 'USDT').replace('/', '').toLowerCase());
-        for (const ws of wsSyms) cexData.addSymbol(ws);
-      }
-      if (gtSymbols.length > 0) {
-        for (const sym of gtSymbols) cexData.addSymbol(sym.replace(/\/USDT.*$/, 'USDT').replace('/', '').toLowerCase());
-      }
-      // 预加载K线（所有新增交易对）
+      // 按交易所启动数据流（通用方式）
       for (const sym of newSymbols) {
-        if (getExchangeId(sym) === 'binance') {
+        const exId = getExchangeId(sym);
+        if (exId === 'binance') {
+          const wsSym = sym.replace(/\/USDT.*$/, 'USDT').replace('/', '').toLowerCase();
+          cexData.addSymbol(wsSym);
+        } else {
+          cexData.addExchangeSymbol(sym, exId);
+        }
+        // 预加载K线
+        if (exId === 'binance') {
           await cexData.prefetchKlines(sym, ['15m', '1h'], 100).catch(()=>{});
           await cexData.prefetchKlines(sym, ['5m'], 50).catch(()=>{});
         } else {
-          await cexData.prefetchGateKlines(sym, ['15m', '1h'], 100).catch(()=>{});
-          await cexData.prefetchGateKlines(sym, ['5m'], 50).catch(()=>{});
+          await cexData.prefetchExchangeKlines(exId, sym, ['15m', '1h'], 100).catch(()=>{});
+          await cexData.prefetchExchangeKlines(exId, sym, ['5m'], 50).catch(()=>{});
         }
       }
       console.log(`[Strategy] ➕ 追加交易对: ${newSymbols.join(', ')} (activeSymbols: ${activeSymbols.length})`);
@@ -1550,34 +1557,31 @@ export async function startStrategy(symbols = ['ETH/USDT']) {
   }
   isRunning = true;
 
-  // 按交易所分离交易对
-  const binanceSymbols = symbols.filter(s => getExchangeId(s) === 'binance');
-  const gateSymbols = symbols.filter(s => getExchangeId(s) === 'gate');
-
-  // 启动 Binance 行情
-  if (binanceSymbols.length > 0) {
-    const wsSymbols = binanceSymbols.map(s =>
+  // 按交易所启动数据流（通用方式）
+  const bnSymbols = symbols.filter(s => getExchangeId(s) === 'binance');
+  if (bnSymbols.length > 0) {
+    const wsSymbols = bnSymbols.map(s =>
       s.replace(/\/USDT.*$/, 'USDT').replace('/', '').toLowerCase()
     );
     cexData.startDataStream(wsSymbols);
   }
-
-  // 启动 Gate 行情轮询
-  if (gateSymbols.length > 0) {
-    for (const sym of gateSymbols) {
-      cexData.addSymbol(sym, 'gate');
+  for (const sym of symbols) {
+    const exId = getExchangeId(sym);
+    if (exId !== 'binance') {
+      cexData.addExchangeSymbol(sym, exId);
     }
-    console.log(`[Strategy] 📡 Gate 数据轮询已添加: ${gateSymbols.join(', ')}`);
   }
 
-  // 预加载历史K线
-  for (const sym of binanceSymbols) {
-    await cexData.prefetchKlines(sym, ['15m', '1h'], 100);
-    await cexData.prefetchKlines(sym, ['5m'], 50);
-  }
-  for (const sym of gateSymbols) {
-    await cexData.prefetchGateKlines(sym, ['15m', '1h'], 100);
-    await cexData.prefetchGateKlines(sym, ['5m'], 50);
+  // 预加载历史K线（通用方式）
+  for (const sym of symbols) {
+    const exId = getExchangeId(sym);
+    if (exId === 'binance') {
+      await cexData.prefetchKlines(sym, ['15m', '1h'], 100);
+      await cexData.prefetchKlines(sym, ['5m'], 50);
+    } else {
+      await cexData.prefetchExchangeKlines(exId, sym, ['15m', '1h'], 100);
+      await cexData.prefetchExchangeKlines(exId, sym, ['5m'], 50);
+    }
   }
 
   // 首次立即评估

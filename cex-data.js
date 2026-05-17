@@ -33,28 +33,35 @@ const MAX_TICKER_HISTORY = 100;
 let restPollTimers = {};
 let wsHasData = {};  // 记录每个流是否收过数据
 
-// ============ Gate 数据缓存（CCXT REST 轮询） ============
+// ============ Gate / OKX 数据缓存（CCXT REST 轮询） ============
 let gateTickerCache = {};        // { 'ETH/USDT:USDT': { last, bid, ask, ... } }
 let gateKlineCache = {};         // { 'ETH/USDT:USDT': { '15m': [...], '1h': [...] } }
 let gatePollTimers = {};         // 轮询定时器
 let gatePollSymbols = [];        // 当前轮询的交易对列表
 
-/** 通过 CCXT 获取 Gate ticker */
-async function gateFetchTicker(symbol) {
+// ============ OKX 数据缓存 ============
+let okxTickerCache = {};
+let okxKlineCache = {};
+let okxPollTimers = {};
+let okxPollSymbols = [];
+
+/** 通用：通过 CCXT 获取任意交易所 Ticker */
+async function exchangeFetchTicker(exchangeId, symbol, tickerCache) {
   try {
     const { default: ccxt } = await import('ccxt');
-    // 使用 cex-engine 的 Gate 实例（如果已配置）
     let ex;
     try {
       const cexEngine = await import('./cex-engine.js');
-      ex = cexEngine.getExchange('gate');
+      ex = cexEngine.getExchange(exchangeId);
     } catch {}
     if (!ex) {
-      ex = new ccxt.gate({ options: { defaultType: 'swap' }, enableRateLimit: true });
+      const ExchangeClass = ccxt[exchangeId];
+      if (!ExchangeClass) return;
+      ex = new ExchangeClass({ options: { defaultType: 'swap' }, enableRateLimit: true });
     }
     const t = await ex.fetchTicker(symbol);
     if (t && t.last) {
-      gateTickerCache[symbol] = {
+      tickerCache[symbol] = {
         symbol: t.symbol, last: t.last, bid: t.bid, ask: t.ask,
         high: t.high, low: t.low, volume: t.baseVolume,
         change: t.change, percentage: t.percentage,
@@ -64,23 +71,25 @@ async function gateFetchTicker(symbol) {
   } catch (e) { /* 静默处理 */ }
 }
 
-/** 通过 CCXT 获取 Gate Kline */
-async function gateFetchKline(symbol, interval) {
+/** 通用：通过 CCXT 获取任意交易所 Kline */
+async function exchangeFetchKline(exchangeId, symbol, interval, klineCache) {
   try {
     const { default: ccxt } = await import('ccxt');
     let ex;
     try {
       const cexEngine = await import('./cex-engine.js');
-      ex = cexEngine.getExchange('gate');
+      ex = cexEngine.getExchange(exchangeId);
     } catch {}
     if (!ex) {
-      ex = new ccxt.gate({ options: { defaultType: 'swap' }, enableRateLimit: true });
+      const ExchangeClass = ccxt[exchangeId];
+      if (!ExchangeClass) return;
+      ex = new ExchangeClass({ options: { defaultType: 'swap' }, enableRateLimit: true });
     }
     const ohlcv = await ex.fetchOHLCV(symbol, interval, undefined, 3);
     if (ohlcv && ohlcv.length > 0) {
-      if (!gateKlineCache[symbol]) gateKlineCache[symbol] = {};
-      if (!gateKlineCache[symbol][interval]) gateKlineCache[symbol][interval] = [];
-      const cache = gateKlineCache[symbol][interval];
+      if (!klineCache[symbol]) klineCache[symbol] = {};
+      if (!klineCache[symbol][interval]) klineCache[symbol][interval] = [];
+      const cache = klineCache[symbol][interval];
       for (const c of ohlcv) {
         const ts = c[0];
         const existing = cache.find(item => item.timestamp === ts);
@@ -88,28 +97,31 @@ async function gateFetchKline(symbol, interval) {
         if (existing) Object.assign(existing, candle);
         else cache.push(candle);
       }
-      // 限制缓存大小
       if (cache.length > 500) cache.splice(0, cache.length - 500);
     }
   } catch (e) { /* 静默处理 */ }
 }
 
+/** 通过 CCXT 获取 Gate ticker (改用通用函数) */
+async function gateFetchTicker(symbol) {
+  return exchangeFetchTicker('gate', symbol, gateTickerCache);
+}
+
+/** 通过 CCXT 获取 Gate Kline (改用通用函数) */
+async function gateFetchKline(symbol, interval) {
+  return exchangeFetchKline('gate', symbol, interval, gateKlineCache);
+}
+
 /** 启动 Gate 数据轮询 */
 function startGatePolling() {
+  if (gatePollTimers['ticker']) return; // 已启动则跳过
   const intervals = ['1m', '5m', '15m', '1h'];
-  // Ticker 每 5 秒轮询
   gatePollTimers['ticker'] = setInterval(() => {
-    for (const sym of gatePollSymbols) {
-      gateFetchTicker(sym);
-    }
+    for (const sym of gatePollSymbols) gateFetchTicker(sym);
   }, 5000);
-  // Kline 每 30 秒轮询
   gatePollTimers['kline'] = setInterval(() => {
-    for (const sym of gatePollSymbols) {
-      for (const iv of intervals) {
-        gateFetchKline(sym, iv);
-      }
-    }
+    for (const sym of gatePollSymbols)
+      for (const iv of intervals) gateFetchKline(sym, iv);
   }, 30000);
   console.log(`[Data] 📡 Gate 数据轮询已启动: ${gatePollSymbols.join(', ')}`);
 }
@@ -120,24 +132,55 @@ function stopGatePolling() {
   console.log('[Data] 📡 Gate 数据轮询已停止');
 }
 
-/** 预加载 Gate Kline 数据（策略启动时调用） */
-export async function prefetchGateKlines(symbol, intervals = ['15m', '1h'], limit = 100) {
+/** 启动 OKX 数据轮询 */
+function startOkxPolling() {
+  if (okxPollTimers['ticker']) return;
+  const intervals = ['1m', '5m', '15m', '1h'];
+  okxPollTimers['ticker'] = setInterval(() => {
+    for (const sym of okxPollSymbols) okxFetchTicker(sym);
+  }, 5000);
+  okxPollTimers['kline'] = setInterval(() => {
+    for (const sym of okxPollSymbols)
+      for (const iv of intervals) okxFetchKline(sym, iv);
+  }, 30000);
+  console.log(`[Data] 📡 OKX 数据轮询已启动: ${okxPollSymbols.join(', ')}`);
+}
+
+function stopOkxPolling() {
+  Object.values(okxPollTimers).forEach(clearInterval);
+  okxPollTimers = {};
+  console.log('[Data] 📡 OKX 数据轮询已停止');
+}
+
+/** OKX 获取函数 */
+async function okxFetchTicker(symbol) {
+  return exchangeFetchTicker('okx', symbol, okxTickerCache);
+}
+async function okxFetchKline(symbol, interval) {
+  return exchangeFetchKline('okx', symbol, interval, okxKlineCache);
+}
+
+/** 预加载 Gate/OKX Kline 数据（策略启动时调用） */
+export async function prefetchExchangeKlines(exchangeId, symbol, intervals = ['15m', '1h'], limit = 100) {
+  const klineCache = exchangeId === 'okx' ? okxKlineCache : gateKlineCache;
   for (const iv of intervals) {
     try {
       const { default: ccxt } = await import('ccxt');
       let ex;
       try {
         const cexEngine = await import('./cex-engine.js');
-        ex = cexEngine.getExchange('gate');
+        ex = cexEngine.getExchange(exchangeId);
       } catch {}
       if (!ex) {
-        ex = new ccxt.gate({ options: { defaultType: 'swap' }, enableRateLimit: true });
+        const ExchangeClass = ccxt[exchangeId];
+        if (!ExchangeClass) continue;
+        ex = new ExchangeClass({ options: { defaultType: 'swap' }, enableRateLimit: true });
       }
       const ohlcv = await ex.fetchOHLCV(symbol, iv, undefined, limit);
       if (ohlcv && ohlcv.length > 0) {
-        if (!gateKlineCache[symbol]) gateKlineCache[symbol] = {};
-        if (!gateKlineCache[symbol][iv]) gateKlineCache[symbol][iv] = [];
-        const cache = gateKlineCache[symbol][iv];
+        if (!klineCache[symbol]) klineCache[symbol] = {};
+        if (!klineCache[symbol][iv]) klineCache[symbol][iv] = [];
+        const cache = klineCache[symbol][iv];
         for (const c of ohlcv) {
           const ts = c[0];
           const existing = cache.find(item => item.timestamp === ts);
@@ -147,7 +190,25 @@ export async function prefetchGateKlines(symbol, intervals = ['15m', '1h'], limi
         }
         if (cache.length > 500) cache.splice(0, cache.length - 500);
       }
-    } catch (e) { console.log(`[Data] ⚠️ Gate Kline预加载失败 ${symbol} ${iv}: ${e.message}`); }
+    } catch (e) { console.log(`[Data] ⚠️ ${exchangeId} Kline预加载失败 ${symbol} ${iv}: ${e.message}`); }
+  }
+}
+
+/** 导出：按交易所添加交易对到轮询系统 */
+export function addExchangeSymbol(symbol, exchangeId) {
+  if (exchangeId === 'gate') {
+    if (!gatePollSymbols.includes(symbol)) {
+      gatePollSymbols.push(symbol);
+      startGatePolling();
+    }
+  } else if (exchangeId === 'okx') {
+    if (!okxPollSymbols.includes(symbol)) {
+      okxPollSymbols.push(symbol);
+      startOkxPolling();
+    }
+  } else {
+    // binance 或其他走 WS
+    addSymbol(symbol);
   }
 }
 
@@ -530,6 +591,10 @@ export function getTicker(symbol) {
   if (symbol && gatePollSymbols.includes(symbol)) {
     return gateTickerCache[symbol] || null;
   }
+  // 检查是否是 OKX 交易对
+  if (symbol && okxPollSymbols.includes(symbol)) {
+    return okxTickerCache[symbol] || null;
+  }
   // 默认 Binance
   const key = (symbol || '').replace(/\/USDT.*$/, 'USDT').replace('/', '').toLowerCase();
   return marketData[key] || null;
@@ -542,6 +607,12 @@ export function getKlines(symbol, interval = '15m', limit = 100) {
   // Gate 交易对
   if (symbol && gatePollSymbols.includes(symbol)) {
     const cache = gateKlineCache[symbol];
+    if (cache && cache[interval]) return cache[interval].slice(-limit);
+    return [];
+  }
+  // OKX 交易对
+  if (symbol && okxPollSymbols.includes(symbol)) {
+    const cache = okxKlineCache[symbol];
     if (cache && cache[interval]) return cache[interval].slice(-limit);
     return [];
   }
