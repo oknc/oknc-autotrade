@@ -819,7 +819,7 @@ export async function openPosition(symbol, side, contracts, exchangeId, options 
 
     let order;
     try {
-      order = await ex.createMarketOrder(symbol, orderSide, contracts, undefined, { ...okxParams(exchangeId, side), ...binanceOrderParams(side) });
+      order = await ex.createMarketOrder(symbol, orderSide, contracts, undefined, { ...okxParams(exchangeId, side), ...(exchangeId === 'binance' ? binanceOrderParams(side) : {}) });
     } catch (e) {
       const errMsg = String(e?.message || e || '');
       // Binance单边模式不接受 positionSide，去掉重试
