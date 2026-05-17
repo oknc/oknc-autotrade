@@ -501,6 +501,11 @@ function createExchangeInstance(config) {
     enableRateLimit: true,
   });
 
+  // OKX 需要 hedged=true 才能自动设置 posSide（双向持仓模式）
+  if (config.exchangeId === 'okx') {
+    ex.hedged = true;
+  }
+
   if (config.testnet) {
     ex.setSandboxMode(true);
   }
