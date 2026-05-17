@@ -731,11 +731,11 @@ function normalizeSymbol(symbol) {
   return symbol;
 }
 
-/** OKX合约：传递 hedged=true 让 CCXT 自动设置 posSide */
+/** OKX合约：直接传小写 positionSide，避免依赖CCXT hedged逻辑 */
 function okxParams(exchangeId, side, isClose) {
   if (exchangeId !== 'okx') return {};
-  // 双向持仓模式，CCXT会根据买卖方向自动设置 posSide: long/short
-  return { hedged: true };
+  const posSide = side === 'long' || side === 'buy' ? 'long' : 'short';
+  return { positionSide: posSide };
 }
 
 /** 获取订单附加参数（交易所差异处理） */
@@ -937,7 +937,7 @@ export async function closePosition(symbol, side, exchangeId, options = {}) {
     } catch {}
 
     const orderSide = side === 'long' ? 'sell' : 'buy';
-    const extraParams = { ...okxParams(exchangeId, side), ...binanceOrderParams(side) };
+    const extraParams = { ...okxParams(exchangeId, side), ...(exchangeId === 'binance' ? binanceOrderParams(side) : {}) };
     if (exchangeId !== 'binance') extraParams.reduceOnly = true;
     const order = await ex.createMarketOrder(symbol, orderSide, contracts, undefined, extraParams);
 
@@ -1076,7 +1076,7 @@ export async function createStopOrder(symbol, side, contracts, stopPrice, exchan
     const ex = getExchange(exchangeId);
     const orderType = options.type === 'take_profit' ? 'TAKE_PROFIT_MARKET' : 'STOP_MARKET';
     const order = await ex.createOrder(symbol, orderType, side, contracts, null, {
-      ...okxParams(exchangeId, side), ...binanceOrderParams(side),
+      ...okxParams(exchangeId, side), ...(exchangeId === 'binance' ? binanceOrderParams(side) : {}),
       stopPrice,
       reduceOnly: options.reduceOnly !== false,
       workingType: 'MARK_PRICE',
@@ -1095,7 +1095,7 @@ export async function createStopLimitOrder(symbol, side, contracts, price, stopP
     const ex = getExchange(exchangeId);
     const orderType = options.type === 'take_profit' ? 'take_profit' : 'stop';
     const order = await ex.createOrder(symbol, orderType, side, contracts, price, {
-      ...okxParams(exchangeId, side), ...binanceOrderParams(side),
+      ...okxParams(exchangeId, side), ...(exchangeId === 'binance' ? binanceOrderParams(side) : {}),
       stopPrice,
       reduceOnly: options.reduceOnly !== false,
     });
