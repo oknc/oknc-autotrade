@@ -48,7 +48,7 @@ export function getSymbolExchangeMap() {
 }
 
 // 策略参数（每5分钟评估一次）
-const EVALUATE_INTERVAL_MS = 5 * 60 * 1000;
+const EVALUATE_INTERVAL_MS = 3 * 60 * 1000;
 let trailIntervalMs = 30000;  // 追踪止盈检查间隔（毫秒），默认30秒
 
 // 技术指标窗口
